@@ -1,0 +1,6 @@
+{
+  "name": "سامانه مقایسه حجم صرافی‌های ارز دیجیتال",
+  "description": "ابزار تحلیل و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال به تفکیک تومان جهت بهبود تجربه مشتری و ارزیابی رقابتی",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
