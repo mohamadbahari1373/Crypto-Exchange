@@ -1,0 +1,6 @@
+{
+  "name": "دیده بُن (didehbon.ir)",
+  "description": "سامانه هوشمند دیده بُن (didehbon.ir) - دیده‌بانی و تحلیل حجم معاملات، اسپرد و نقدینگی صرافی‌های ارز دیجیتال",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
