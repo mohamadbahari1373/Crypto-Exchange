@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import DidehbonLogo from '@/components/DidehbonLogo';
+import UsdtMoneyFlowSankey from '@/components/UsdtMoneyFlowSankey';
 import {
   TrendingUp,
   TrendingDown,
@@ -1069,6 +1070,12 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                 {lang === 'fa' ? 'تعداد معاملات بررسی‌شده:' : 'Trades analyzed:'} {formatCount(usdtTmnOrderflow.tradeCount, lang)}
               </div>
             </div>
+            <UsdtMoneyFlowSankey
+              buyVolumeToman={usdtTmnOrderflow.buyVolumeToman}
+              sellVolumeToman={usdtTmnOrderflow.sellVolumeToman}
+              isDark={isDark}
+              lang={lang}
+            />
           </>
         ) : (
           <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-5 text-center text-xs text-slate-400">
