@@ -108,6 +108,7 @@ function money_flow_empty_response(string $currency, int $limit, string $warning
         'timestamp' => (int) round(microtime(true) * 1000),
         'exchange' => 'Wallex',
         'usdtPriceToman' => 0,
+        'usdtTmnChangePct' => 0,
         'totalTradesParsed' => 0,
         'summary' => [
             'totalInflowToman' => 0,
@@ -120,6 +121,7 @@ function money_flow_empty_response(string $currency, int $limit, string $warning
             'totalCoinsTracked' => 0,
         ],
         'radar' => ['topInflows' => [], 'topOutflows' => []],
+        'wallexCoins' => [],
         'sankey' => ['nodes' => [], 'links' => []],
         'coinStats' => [],
         'currency' => $currency,
@@ -132,6 +134,7 @@ function money_flow_empty_response(string $currency, int $limit, string $warning
 function money_flow_build_response(array $symbols, string $currency, int $limit, bool $isFallback): array
 {
     $usdtPriceToman = money_flow_number($symbols['USDTTMN']['stats']['lastPrice'] ?? 0);
+    $usdtTmnChangePct = money_flow_number($symbols['USDTTMN']['stats']['24h_ch'] ?? 0);
     $coins = [];
 
     foreach ($symbols as $market) {
@@ -273,6 +276,19 @@ function money_flow_build_response(array $symbols, string $currency, int $limit,
         return $right['totalVolumeToman'] <=> $left['totalVolumeToman'];
     });
 
+    $wallexCoins = array_map(
+        static function (array $coin) use ($usdtPriceToman): array {
+            return [
+                'symbol' => $coin['symbol'],
+                'priceChange24h' => money_flow_number($coin['priceChange24h'] ?? 0),
+                'volume24hUsd' => $usdtPriceToman > 0
+                    ? $coin['totalVolumeToman'] / $usdtPriceToman
+                    : 0,
+            ];
+        },
+        $allCoins
+    );
+
     $totalInflow = array_sum(array_column($allCoins, 'inflowToman'));
     $totalOutflow = array_sum(array_column($allCoins, 'outflowToman'));
     $totalVolume = array_sum(array_column($allCoins, 'totalVolumeToman'));
@@ -328,6 +344,7 @@ function money_flow_build_response(array $symbols, string $currency, int $limit,
         'timestamp' => (int) round(microtime(true) * 1000),
         'exchange' => 'Wallex',
         'usdtPriceToman' => $usdtPriceToman,
+        'usdtTmnChangePct' => $usdtTmnChangePct,
         'totalTradesParsed' => 0,
         'summary' => [
             'totalInflowToman' => $totalInflow,
@@ -343,6 +360,7 @@ function money_flow_build_response(array $symbols, string $currency, int $limit,
             'topInflows' => array_slice($topInflows, 0, 8),
             'topOutflows' => array_slice($topOutflows, 0, 8),
         ],
+        'wallexCoins' => $wallexCoins,
         'sankey' => [
             'nodes' => array_values($nodes),
             'links' => $links,

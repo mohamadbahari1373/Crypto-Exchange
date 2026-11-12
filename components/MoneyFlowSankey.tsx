@@ -1,9 +1,18 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import DidehbonLogo from '@/components/DidehbonLogo';
 import UsdtMoneyFlowSankey from '@/components/UsdtMoneyFlowSankey';
+import {
+  createWallexRadarFallbackCoin,
+  fetchSevenExchangeRadar,
+  normalizeSevenExchangeSymbol,
+  type SevenExchangeRadarCoin,
+  type SevenExchangeRadarResponse,
+  type WallexRadarCoin,
+} from '@/lib/sevenExchangeRadar';
 import {
   TrendingUp,
   TrendingDown,
@@ -33,7 +42,6 @@ import {
   Filter,
   ChevronRight,
   Sparkles,
-  PieChart,
 } from 'lucide-react';
 import {
   formatCount,
@@ -41,17 +49,6 @@ import {
   formatTomanVolume,
   toPersianDigits,
 } from '@/lib/formatters';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip as RechartsTooltip,
-  Cell,
-  ReferenceLine,
-} from 'recharts';
-
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
 
 interface SankeyNode {
@@ -106,15 +103,35 @@ interface RadarCoinItem {
   netFlowToman: number;
   inflowToman: number;
   outflowToman: number;
+  volume24hToman?: number;
   buyPressurePercent?: number;
   sellPressurePercent?: number;
   priceChange24h?: number;
+}
+
+type FlowIntensityStatus = 'smart_inflow' | 'neutral' | 'heavy_outflow' | 'normal';
+
+function getFlowIntensityStatus(
+  netFlowToman: number,
+  volume24hToman: number | undefined
+): { intensity: number | null; status: FlowIntensityStatus } {
+  if (!Number.isFinite(volume24hToman) || !volume24hToman || volume24hToman <= 0) {
+    return { intensity: null, status: 'normal' };
+  }
+
+  const intensity = (netFlowToman / volume24hToman) * 100;
+  if (!Number.isFinite(intensity)) return { intensity: null, status: 'normal' };
+  if (intensity >= 4) return { intensity, status: 'smart_inflow' };
+  if (intensity <= -4) return { intensity, status: 'heavy_outflow' };
+  if (intensity >= -1.5 && intensity <= 1.5) return { intensity, status: 'neutral' };
+  return { intensity, status: 'normal' };
 }
 
 interface MoneyFlowResponse {
   timestamp: number;
   exchange: string;
   usdtPriceToman: number;
+  usdtTmnChangePct?: number;
   totalTradesParsed: number;
   summary: {
     totalInflowToman: number;
@@ -134,6 +151,7 @@ interface MoneyFlowResponse {
     nodes: SankeyNode[];
     links: SankeyLink[];
   };
+  wallexCoins?: WallexRadarCoin[];
   coinStats: CoinFlowStat[];
   isFallback?: boolean;
   warning?: string;
@@ -161,10 +179,20 @@ function parseMoneyFlowResponse(payload: unknown): MoneyFlowResponse {
         .filter((coin) => Number.isFinite(coin.outflowToman) && coin.outflowToman > 0)
         .sort((a, b) => a.netFlowToman - b.netFlowToman || b.outflowToman - a.outflowToman)
         .slice(0, 8);
+  const wallexCoins = Array.isArray(response.wallexCoins)
+    ? response.wallexCoins.filter((coin) => coin && typeof coin.symbol === 'string')
+    : coinStats.map((coin) => ({
+        symbol: coin.symbol,
+        priceChange24h: coin.priceChange24h ?? 0,
+        volume24hUsd: response.usdtPriceToman > 0
+          ? coin.totalVolumeToman / response.usdtPriceToman
+          : coin.inflowUsdt + coin.outflowUsdt,
+      }));
 
   return {
     ...response,
     coinStats,
+    wallexCoins,
     radar: { ...apiRadar, topInflows, topOutflows },
   };
 }
@@ -172,6 +200,199 @@ function parseMoneyFlowResponse(payload: unknown): MoneyFlowResponse {
 interface MoneyFlowSankeyProps {
   isDark: boolean;
   lang: 'fa' | 'en';
+}
+
+interface SelectedRadarCoin {
+  coin: SevenExchangeRadarCoin;
+  nameFa: string;
+}
+
+function isActiveRadarSignal(coin: SevenExchangeRadarCoin | undefined): boolean {
+  return Boolean(
+    coin &&
+    coin.hasSignal &&
+    Math.abs(coin.globalNetFlow1h) >= 5_000 &&
+    Math.abs(coin.predictedUsdtPct) >= 0.15 &&
+    ((coin.zScore >= 1.15 && coin.predictedUsdtPct > 0) ||
+      (coin.zScore <= -1.15 && coin.predictedUsdtPct < 0)),
+  );
+}
+
+function SevenExchangeSignalBadge({
+  coin,
+  nameFa,
+  onSelect,
+}: {
+  coin: SevenExchangeRadarCoin;
+  nameFa: string;
+  onSelect: (coin: SevenExchangeRadarCoin, nameFa: string) => void;
+}) {
+  const active = isActiveRadarSignal(coin);
+  const bullish = active && coin.zScore >= 1.15 && coin.predictedUsdtPct > 0;
+  const bearish = active && coin.zScore <= -1.15 && coin.predictedUsdtPct < 0;
+  const strong = Math.abs(coin.zScore) >= 2;
+  const direction = bullish ? 'صعودی' : 'نزولی';
+  const formatPct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  const timeframe = coin.timeframe === 'فوری (۱۵ تا ۶۰ دقیقه)'
+    ? 'فوری (۱۵ تا ۶۰ دقیقه)'
+    : '۱ تا ۴ ساعت آینده';
+  const badgeLabel = bullish
+    ? `🟢 سیگنال ${strong ? 'قوی ' : ''}صعودی (${formatPct(coin.predictedUsdtPct)}) • ${timeframe}`
+    : bearish
+      ? `🔴 سیگنال ${strong ? 'قوی ' : ''}نزولی (${formatPct(coin.predictedUsdtPct)}) • ${timeframe}`
+      : '📊 تحلیل رادار';
+
+  return (
+    <button
+        type="button"
+        aria-label={active
+          ? `سیگنال ${strong ? 'قوی ' : ''}${direction}: تتر ${formatPct(coin.predictedUsdtPct)}، تومان ${formatPct(coin.predictedTmnPct)}، ${timeframe}`
+          : `نمایش وضعیت بازار ${nameFa} (${coin.symbol})`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(coin, nameFa);
+        }}
+        className={`inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-tight transition-colors ${
+          active
+            ? bullish
+              ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300 hover:border-emerald-400'
+              : 'border-rose-400/40 bg-rose-500/15 text-rose-300 hover:border-rose-400'
+            : 'border-slate-700 bg-slate-800/90 text-slate-300 hover:border-cyan-500/50'
+        }`}
+    >
+      {active && <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${bullish ? 'bg-emerald-300' : 'bg-rose-300'}`} />}
+      {badgeLabel}
+    </button>
+  );
+}
+
+function SevenExchangeRadarModal({
+  coin,
+  nameFa,
+  onClose,
+}: {
+  coin: SevenExchangeRadarCoin;
+  nameFa: string;
+  onClose: () => void;
+}) {
+  const active = isActiveRadarSignal(coin);
+  const bullish = active && coin.zScore >= 1.15 && coin.predictedUsdtPct > 0;
+  const bearish = active && coin.zScore <= -1.15 && coin.predictedUsdtPct < 0;
+  const strong = Math.abs(coin.zScore) >= 2;
+  const formatPct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  const formatCompact = (value: number) => {
+    const absolute = Math.abs(value);
+    const unit = absolute >= 1_000_000_000
+      ? { divisor: 1_000_000_000, suffix: 'B' }
+      : absolute >= 1_000_000
+        ? { divisor: 1_000_000, suffix: 'M' }
+        : absolute >= 1_000
+          ? { divisor: 1_000, suffix: 'K' }
+          : null;
+    if (!unit) return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    const compact = (absolute / unit.divisor).toFixed(1).replace(/\.0$/, '');
+    return `${compact}${unit.suffix}`;
+  };
+  const flowText = !coin.flowEstimateAvailable
+    ? 'اطلاعات کافی نیست'
+    : Math.abs(coin.globalNetFlow1h) < 1
+      ? '<$1'
+      : `${coin.globalNetFlow1h > 0 ? '+' : '-'}$${formatCompact(coin.globalNetFlow1h)}`;
+  const timeframe = coin.timeframe === 'فوری (۱۵ تا ۶۰ دقیقه)'
+    ? '۱۵ تا ۶۰ دقیقه آینده'
+    : coin.timeframe === 'کوتاه‌مدت (۱ تا ۴ ساعت)'
+      ? '۱ تا ۴ ساعت آینده'
+      : coin.timeframe === 'میان‌مدت (۴ تا ۲۴ ساعت)'
+        ? '۴ تا ۲۴ ساعت آینده'
+        : '';
+  const hasCirculatingSupply =
+    Number.isFinite(coin.circulatingSupply) && coin.circulatingSupply > 0;
+  const supplyText = hasCirculatingSupply ? formatCompact(coin.circulatingSupply) : '';
+  const formatTomanAmount = (value: number | undefined) =>
+    new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value ?? 0);
+  const effectText = Math.abs(coin.usdtTmnMomentumPct) < 0.05
+    ? 'خنثی'
+    : formatPct(coin.usdtTmnMomentumPct);
+
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="seven-exchange-radar-title"
+        className="w-full max-w-md rounded-2xl border border-slate-700/80 bg-slate-900 p-5 text-right text-slate-100 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="mb-2 flex items-center justify-between gap-4">
+          <h2 id="seven-exchange-radar-title" className="text-base font-bold text-white">
+            {nameFa} <span className="text-slate-400">• {coin.symbol}</span>
+          </h2>
+          <button
+            type="button"
+            autoFocus
+            aria-label="بستن پنجره"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div className="divide-y divide-slate-800 text-sm">
+          <p className="py-3 first:pt-0">
+            وضعیت: {active
+              ? <>{bullish ? '🟢 سیگنال' : '🔴 سیگنال'} {strong ? 'قوی ' : ''}{bullish ? 'صعودی' : 'نزولی'} (<span dir="ltr">{timeframe}</span>)</>
+              : '⚪ جریان عادی بازار'}
+          </p>
+          {active && (
+            <p className="py-3">
+              هدف قیمتی: دلاری <span dir="ltr">{formatPct(coin.predictedUsdtPct)}</span> | تومانی <span dir="ltr">{formatPct(coin.predictedTmnPct)}</span>
+            </p>
+          )}
+          <p className={`py-3 ${
+            coin.globalNetFlow1h > 0
+              ? 'text-emerald-300'
+              : coin.globalNetFlow1h < 0
+                ? 'text-rose-300'
+                : 'text-slate-300'
+          }`}>
+            جریان پول جهانی (۱ ساعته): <span dir="ltr">{flowText}</span>
+          </p>
+          <p className={`py-3 ${effectText === 'خنثی' ? 'text-slate-300' : 'text-cyan-300'}`}>
+            اثر نرخ تتر والکس: {effectText === 'خنثی' ? effectText : <span dir="ltr">{effectText}</span>}
+          </p>
+          {hasCirculatingSupply && <p className="py-3">عرضه در گردش: <span dir="ltr">{supplyText}</span></p>}
+          {active && <p className="py-3">اعتبار سیگنال: <span dir="ltr">{coin.confidence.toFixed(0)}%</span></p>}
+          {coin.isWallexFallback && (
+            <>
+              <p className="py-3">
+                تغییر ۲۴ساعته والکس: <span dir="ltr">{formatPct(coin.priceChange24h ?? 0)}</span>
+              </p>
+              <p className="py-3">
+                حجم خرید والکس: <span dir="ltr">{formatTomanAmount(coin.buyVolumeToman)}</span> تومان
+              </p>
+              <p className="py-3">
+                حجم فروش والکس: <span dir="ltr">{formatTomanAmount(coin.sellVolumeToman)}</span> تومان
+              </p>
+              <p className="py-3">
+                نرخ تتر مبنا: <span dir="ltr">{formatTomanAmount(coin.usdtPriceToman)}</span> تومان
+              </p>
+              {(coin.lastPriceToman ?? 0) > 0 && (
+                <p className="py-3">
+                  آخرین قیمت والکس: <span dir="ltr">{formatTomanAmount(coin.lastPriceToman)}</span> تومان
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  );
 }
 
 interface UsdtTmnOrderflow {
@@ -220,18 +441,12 @@ const COIN_PALETTE: Record<string, string> = {
 
 export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) {
   const [data, setData] = useState<MoneyFlowResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [filterCurrency, setFilterCurrency] = useState<'ALL' | 'TMN' | 'USDT'>('ALL');
-  const [coinLimit, setCoinLimit] = useState<string>('30');
-  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [activeViewMode, setActiveViewMode] = useState<'toman' | 'usdt'>('toman');
-
-  // Visualization Mode inside the chart box:
-  // 'sankey_clean' = Clean uncluttered Sankey with density control
-  // 'bidirectional_bar' = Side-by-side Inflow vs Outflow divergence bars (zero line crossing!)
-  // 'matrix_rotation' = Capital migration & market share matrix
-  const [chartVisualMode, setChartVisualMode] = useState<'sankey_clean' | 'bidirectional_bar' | 'matrix_rotation'>('sankey_clean');
+  const [sevenExchangeRadar, setSevenExchangeRadar] = useState<SevenExchangeRadarResponse | null>(null);
+  const [selectedRadarCoin, setSelectedRadarCoin] = useState<SelectedRadarCoin | null>(null);
+  const [signalOnly, setSignalOnly] = useState(false);
+  const filterCurrency = 'ALL';
+  const coinLimit = '30';
+  const activeViewMode = 'toman';
 
   // Chart-specific density & solo filters:
   const [sankeyDensity, setSankeyDensity] = useState<'top8' | 'top15' | 'all'>('top8');
@@ -255,9 +470,118 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
   const [usdtTmnOrderflow, setUsdtTmnOrderflow] = useState<UsdtTmnOrderflow | null>(null);
   const [orderflowLoading, setOrderflowLoading] = useState<boolean>(true);
   const [orderflowError, setOrderflowError] = useState<string | null>(null);
+  const [radarError, setRadarError] = useState(false);
+  const latestMoneyFlowData = useRef<MoneyFlowResponse | null>(null);
+  const radarRequestStarted = useRef(false);
+  const radarMounted = useRef(true);
+
+  useEffect(() => {
+    radarMounted.current = true;
+    return () => {
+      radarMounted.current = false;
+    };
+  }, []);
+
+  const fetchRadar = useCallback(async (
+    source: MoneyFlowResponse,
+    forceRefresh = false,
+  ) => {
+    try {
+      const payload = await fetchSevenExchangeRadar(
+        source.wallexCoins ?? [],
+        source.usdtPriceToman,
+        source.usdtTmnChangePct ?? 0,
+        forceRefresh,
+      );
+      if (radarMounted.current) {
+        setSevenExchangeRadar(payload);
+        setRadarError(false);
+      }
+    } catch {
+      if (radarMounted.current) setRadarError(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    latestMoneyFlowData.current = data;
+    if (!data || radarRequestStarted.current) return;
+    radarRequestStarted.current = true;
+    void fetchRadar(data);
+  }, [data, fetchRadar]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const latestData = latestMoneyFlowData.current;
+      if (latestData) void fetchRadar(latestData, true);
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchRadar]);
+
+  useEffect(() => {
+    if (!selectedRadarCoin) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedRadarCoin(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedRadarCoin]);
+
+  const radarBySymbol = useMemo(() => {
+    const entries = sevenExchangeRadar?.coins.map((coin) => [normalizeSevenExchangeSymbol(coin.symbol), coin] as const) ?? [];
+    return new Map(entries);
+  }, [sevenExchangeRadar]);
+
+  const getRadarCoin = useCallback((
+    coin: CoinFlowStat | RadarCoinItem,
+    direction?: 'inflow' | 'outflow',
+  ): SevenExchangeRadarCoin => {
+    const symbol = normalizeSevenExchangeSymbol(coin.symbol);
+    const radarCoin = radarBySymbol.get(symbol);
+    if (radarCoin) return radarCoin;
+
+    const wallexCoin = data?.coinStats.find(
+      (item) => normalizeSevenExchangeSymbol(item.symbol) === symbol,
+    );
+    const source = wallexCoin ?? coin;
+    const netFlowToman = wallexCoin
+      ? wallexCoin.netFlowToman
+      : direction === 'outflow'
+        ? -Math.abs(coin.netFlowToman)
+        : direction === 'inflow'
+          ? Math.abs(coin.netFlowToman)
+          : coin.netFlowToman;
+    const usdtPriceToman = data?.usdtPriceToman || sevenExchangeRadar?.usdtTmnRate || 234600;
+
+    return createWallexRadarFallbackCoin({
+      symbol,
+      buyVolumeToman: source.inflowToman,
+      sellVolumeToman: source.outflowToman,
+      netFlowToman,
+      lastPriceToman: wallexCoin?.lastPriceToman ?? 0,
+      priceChange24h: source.priceChange24h ?? 0,
+      usdtPriceToman,
+      usdtTmnMomentumPct: sevenExchangeRadar?.usdtTmnMomentumPct ?? 0,
+    });
+  }, [data, radarBySymbol, sevenExchangeRadar]);
+
+  const openRadarCoin = useCallback((
+    coin: CoinFlowStat | RadarCoinItem,
+    direction?: 'inflow' | 'outflow',
+  ) => {
+    setSelectedRadarCoin({
+      coin: getRadarCoin(coin, direction),
+      nameFa: coin.nameFa,
+    });
+  }, [getRadarCoin]);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const query = new URLSearchParams({ currency: filterCurrency, limit: coinLimit });
       const res = await fetch(`/api/money-flow.php?${query.toString()}`, {
@@ -268,13 +592,10 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
       }
       const json: unknown = await res.json();
       setData(parseMoneyFlowResponse(json));
-      setLastUpdated(new Date());
     } catch (e) {
       console.error('Failed to fetch Wallex money flow:', e);
-    } finally {
-      setLoading(false);
     }
-  }, [filterCurrency, coinLimit]);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -290,7 +611,6 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
         const json: unknown = await res.json();
         if (isMounted) {
           setData(parseMoneyFlowResponse(json));
-          setLastUpdated(new Date());
         }
       } catch (e) {
         console.error('Failed to load money flow:', e);
@@ -300,16 +620,15 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     return () => {
       isMounted = false;
     };
-  }, [filterCurrency, coinLimit]);
+  }, []);
 
   // Auto refresh stream every 20 seconds
   useEffect(() => {
-    if (!autoRefresh) return;
     const interval = setInterval(() => {
       fetchData();
     }, 20000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchData]);
+  }, [fetchData]);
 
   useEffect(() => {
     let isMounted = true;
@@ -535,10 +854,64 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     return `$${Math.round(num).toLocaleString()}`;
   }, []);
 
+  const renderFlowIntensityBadge = (netFlowToman: number, volume24hToman: number | undefined) => {
+    const { intensity, status } = getFlowIntensityStatus(netFlowToman, volume24hToman);
+    const badge = {
+      smart_inflow: {
+        fa: 'ورود هوشمند 🟢',
+        en: 'Smart inflow 🟢',
+        className: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+        evaluationFa: 'اثرگذاری بالا',
+        evaluationEn: 'High impact',
+      },
+      neutral: {
+        fa: 'جذب نقدینگی / خنثی ⚪',
+        en: 'Liquidity absorption / neutral ⚪',
+        className: 'border-slate-600/60 bg-slate-800/80 text-slate-300',
+        evaluationFa: 'اثرگذاری ناچیز',
+        evaluationEn: 'Negligible impact',
+      },
+      heavy_outflow: {
+        fa: 'خروج سنگین 🔴',
+        en: 'Heavy outflow 🔴',
+        className: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
+        evaluationFa: 'اثرگذاری بالا',
+        evaluationEn: 'High impact',
+      },
+      normal: {
+        fa: 'معمولی',
+        en: 'Normal',
+        className: 'border-slate-700/70 bg-slate-800/60 text-slate-400',
+        evaluationFa: 'اثرگذاری معمولی',
+        evaluationEn: 'Typical impact',
+      },
+    }[status];
+    const formattedIntensity = intensity === null
+      ? '—'
+      : `${intensity >= 0 ? '+' : ''}${intensity.toFixed(2)}%`;
+    const tooltip = lang === 'fa'
+      ? `خالص ورود: ${formatToman(netFlowToman)} | نسبت به حجم روزانه: ${formattedIntensity} | ارزیابی: ${badge.evaluationFa}`
+      : `Net flow: ${formatToman(netFlowToman)} | Daily volume ratio: ${formattedIntensity} | Assessment: ${badge.evaluationEn}`;
+
+    return (
+      <span
+        title={tooltip}
+        aria-label={tooltip}
+        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] leading-tight ${badge.className}`}
+      >
+        {lang === 'fa' ? badge.fa : badge.en}
+      </span>
+    );
+  };
+
   // Filtered Coins for Table
   const filteredCoins = useMemo(() => {
     if (!data?.coinStats) return [];
     let list = data.coinStats;
+
+    if (signalOnly) {
+      list = list.filter((coin) => isActiveRadarSignal(radarBySymbol.get(normalizeSevenExchangeSymbol(coin.symbol))));
+    }
 
     if (statusFilter === 'INFLOW') {
       list = list.filter((c) => c.flowStatus === 'NET_INFLOW');
@@ -556,7 +929,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     }
 
     return list;
-  }, [data, statusFilter, searchQuery]);
+  }, [data, statusFilter, searchQuery, signalOnly, radarBySymbol]);
 
   // Major spotlight coins: BTC and ETH specifically
   const btcStat = useMemo(() => data?.coinStats.find((c) => c.symbol === 'BTC'), [data]);
@@ -567,6 +940,10 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     if (!data?.coinStats) return [];
     return data.coinStats.slice(0, 8);
   }, [data]);
+
+  const filterRadarCoins = (coins: RadarCoinItem[]) => signalOnly
+    ? coins.filter((coin) => isActiveRadarSignal(radarBySymbol.get(normalizeSevenExchangeSymbol(coin.symbol))))
+    : coins;
 
   // --------------------------------------------------------------------------
   // CLEAN & CRYSTAL SANKEY GRAPH CONFIGURATION
@@ -792,38 +1169,6 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     formatUsdt,
   ]);
 
-  // --------------------------------------------------------------------------
-  // BI-DIRECTIONAL NET DIVERGENCE CHART DATA (صفر تداخل و خطوط تودرتو)
-  // --------------------------------------------------------------------------
-  const biDirectionalBarData = useMemo(() => {
-    if (!data?.coinStats) return [];
-    let list = data.coinStats;
-
-    if (selectedSoloCoin !== 'ALL') {
-      list = list.filter((c) => c.symbol === selectedSoloCoin);
-    } else if (sankeyDensity === 'top8') {
-      list = list.slice(0, 8);
-    } else if (sankeyDensity === 'top15') {
-      list = list.slice(0, 15);
-    } else {
-      list = list.slice(0, 25);
-    }
-
-    return list.map((coin) => ({
-      symbol: coin.symbol,
-      nameFa: coin.nameFa,
-      inflowToman: coin.inflowToman,
-      outflowToman: -coin.outflowToman, // Negative for left side
-      outflowPositive: coin.outflowToman,
-      netFlowToman: coin.netFlowToman,
-      buyPressure: coin.buyPressurePercent,
-      sellPressure: coin.sellPressurePercent,
-      displayInflow: activeViewMode === 'toman' ? coin.inflowToman : coin.inflowUsdt,
-      displayOutflow: activeViewMode === 'toman' ? -coin.outflowToman : -coin.outflowUsdt,
-      displayNet: activeViewMode === 'toman' ? coin.netFlowToman : coin.netFlowUsdt,
-    }));
-  }, [data, selectedSoloCoin, sankeyDensity, activeViewMode]);
-
   return (
     <div className={`w-full transition-colors duration-200 ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
       {/* 1. Header & Quick Controls */}
@@ -857,73 +1202,6 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
             </div>
           )}
 
-          {/* Currency Filter */}
-          <div className="flex bg-slate-900/90 p-1 rounded-xl text-xs font-semibold border border-slate-700/80 shadow-lg">
-            <button
-              onClick={() => setFilterCurrency('ALL')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                filterCurrency === 'ALL'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              {lang === 'fa' ? 'همه بازارها' : 'All Markets'}
-            </button>
-            <button
-              onClick={() => setFilterCurrency('TMN')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                filterCurrency === 'TMN'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              {lang === 'fa' ? 'فقط تومانی (TMN)' : 'Toman Only'}
-            </button>
-            <button
-              onClick={() => setFilterCurrency('USDT')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                filterCurrency === 'USDT'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              {lang === 'fa' ? 'فقط تتری (USDT)' : 'USDT Only'}
-            </button>
-          </div>
-
-          {/* Unit Toggle */}
-          <div className="flex bg-slate-900/90 p-1 rounded-xl text-xs font-semibold border border-slate-700/80 shadow-lg">
-            <button
-              onClick={() => setActiveViewMode('toman')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                activeViewMode === 'toman'
-                  ? 'bg-slate-700 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              تومان
-            </button>
-            <button
-              onClick={() => setActiveViewMode('usdt')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                activeViewMode === 'usdt'
-                  ? 'bg-slate-700 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              USDT
-            </button>
-          </div>
-
-          {/* Refresh Button */}
-          <button
-            onClick={fetchData}
-            disabled={loading}
-            className="flex items-center gap-1.5 bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-slate-200 hover:text-white px-3.5 py-2 rounded-xl text-xs font-medium transition-all shadow-lg cursor-pointer"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${loading ? 'animate-spin' : ''}`} />
-            <span>{loading ? (lang === 'fa' ? 'در حال دریافت...' : 'Fetching...') : (lang === 'fa' ? 'بروزرسانی' : 'Refresh')}</span>
-          </button>
         </div>
       </div>
 
@@ -1094,6 +1372,32 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
         </div>
       )}
 
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-900/50 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>
+            پوشش نقدینگی مرجع (Binance • OKX • Kraken + Wallex):
+            {' '}
+            <strong className="font-mono text-cyan-300">{sevenExchangeRadar?.commonCoins ?? '—'}</strong>
+          </span>
+          <span>
+            سیگنال فعال: <strong className="font-mono text-emerald-300">{sevenExchangeRadar?.activeSignals ?? '—'}</strong>
+          </span>
+          {radarError && <span role="status" className="text-amber-300">داده رادار در دسترس نیست.</span>}
+        </div>
+        <button
+          type="button"
+          aria-pressed={signalOnly}
+          onClick={() => setSignalOnly((current) => !current)}
+          className={`rounded-lg border px-3 py-1.5 font-semibold transition-colors ${
+            signalOnly
+              ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-200'
+              : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-cyan-700'
+          }`}
+        >
+          فقط کوین‌های دارای سیگنال {signalOnly ? '✓' : ''}
+        </button>
+      </div>
+
       {/* 2. AT-A-GLANCE RADAR: پول الان داره از کجا خارج میشه و وارد چه ارزی میشه؟ */}
       <div className="mb-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 p-5 text-white shadow-xl border border-slate-800">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-4 border-b border-slate-800 pb-3">
@@ -1122,18 +1426,29 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
             </div>
 
             <div className="space-y-2.5">
-              {data?.radar?.topOutflows && data.radar.topOutflows.length > 0 ? (
-                data.radar.topOutflows.slice(0, 4).map((coin) => (
+              {data?.radar?.topOutflows && filterRadarCoins(data.radar.topOutflows).length > 0 ? (
+                filterRadarCoins(data.radar.topOutflows).slice(0, 4).map((coin) => {
+                  const signal = getRadarCoin(coin, 'outflow');
+                  return (
                   <div
                     key={coin.symbol}
                     onClick={() => {
                       setSelectedSoloCoin(coin.symbol);
+                      openRadarCoin(coin, 'outflow');
                     }}
                     className="flex items-center justify-between bg-slate-900/80 hover:bg-slate-850 p-2 rounded-lg border border-rose-900/30 cursor-pointer transition-all hover:border-rose-500/50"
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono font-bold text-sm text-slate-200">{coin.symbol}</span>
                       <span className="text-xs text-slate-400">{coin.nameFa}</span>
+                      <SevenExchangeSignalBadge
+                        coin={signal}
+                        nameFa={coin.nameFa}
+                        onSelect={(selectedCoin, selectedName) =>
+                          setSelectedRadarCoin({ coin: selectedCoin, nameFa: selectedName })
+                        }
+                      />
+                      {renderFlowIntensityBadge(-Math.abs(coin.netFlowToman), coin.volume24hToman)}
                     </div>
                     <div className="text-right">
                       <div className="text-xs font-bold text-rose-400 font-mono">
@@ -1144,7 +1459,8 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                       </div>
                     </div>
                   </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="text-xs text-slate-400 py-2 text-center">
                   {data?.isFallback
@@ -1179,18 +1495,29 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
             </div>
 
             <div className="space-y-2.5">
-              {data?.radar?.topInflows && data.radar.topInflows.length > 0 ? (
-                data.radar.topInflows.slice(0, 4).map((coin) => (
+              {data?.radar?.topInflows && filterRadarCoins(data.radar.topInflows).length > 0 ? (
+                filterRadarCoins(data.radar.topInflows).slice(0, 4).map((coin) => {
+                  const signal = getRadarCoin(coin, 'inflow');
+                  return (
                   <div
                     key={coin.symbol}
                     onClick={() => {
                       setSelectedSoloCoin(coin.symbol);
+                      openRadarCoin(coin, 'inflow');
                     }}
                     className="flex items-center justify-between bg-slate-900/80 hover:bg-slate-850 p-2 rounded-lg border border-emerald-900/30 cursor-pointer transition-all hover:border-emerald-500/50"
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono font-bold text-sm text-slate-200">{coin.symbol}</span>
                       <span className="text-xs text-slate-400">{coin.nameFa}</span>
+                      <SevenExchangeSignalBadge
+                        coin={signal}
+                        nameFa={coin.nameFa}
+                        onSelect={(selectedCoin, selectedName) =>
+                          setSelectedRadarCoin({ coin: selectedCoin, nameFa: selectedName })
+                        }
+                      />
+                      {renderFlowIntensityBadge(Math.abs(coin.netFlowToman), coin.volume24hToman)}
                     </div>
                     <div className="text-right">
                       <div className="text-xs font-bold text-emerald-400 font-mono">
@@ -1201,7 +1528,8 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                       </div>
                     </div>
                   </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="text-xs text-slate-400 py-2 text-center">
                   {data?.isFallback
@@ -1214,9 +1542,9 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
         </div>
       </div>
 
-      {/* 4. THE INTERACTIVE MONEY FLOW VISUALIZER WITH 3 UNCLUTTERED MODES */}
+      {/* 4. THE INTERACTIVE SANKEY MONEY FLOW VISUALIZER */}
       <div className="mb-6 rounded-2xl p-5 border border-slate-800 bg-slate-900/90 shadow-2xl text-slate-100 backdrop-blur-xl">
-        {/* Top Header of Chart with Mode Switcher */}
+        {/* Top Header of Chart */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4 border-b border-slate-800/90 pb-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -1228,45 +1556,13 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
             <p className="text-xs text-slate-400">
               {lang === 'fa'
                 ? 'نمای تفکیک‌شده و بدون تداخل خطوط برای تحلیل آسان ورود و خروج پول'
-                : 'Clutter-free and categorized views for effortless capital inflow and outflow analysis'}
+                : 'A clutter-free view for effortless capital inflow and outflow analysis'}
             </p>
           </div>
 
-          {/* View Mode Selector Tabs */}
-          <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800">
-            <button
-              onClick={() => setChartVisualMode('sankey_clean')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                chartVisualMode === 'sankey_clean'
-                  ? 'bg-blue-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <ArrowRightLeft className="w-3.5 h-3.5" />
-              <span>جریان آبشاری (Sankey خلوت)</span>
-            </button>
-            <button
-              onClick={() => setChartVisualMode('bidirectional_bar')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                chartVisualMode === 'bidirectional_bar'
-                  ? 'bg-indigo-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>ترازنامه دوطرفه (بسیار شفاف)</span>
-            </button>
-            <button
-              onClick={() => setChartVisualMode('matrix_rotation')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                chartVisualMode === 'matrix_rotation'
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <PieChart className="w-3.5 h-3.5" />
-              <span>ماتریس چرخش سرمایه</span>
-            </button>
+          <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-300 text-xs font-bold">
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            <span>جریان آبشاری (Sankey خلوت)</span>
           </div>
         </div>
 
@@ -1313,37 +1609,35 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
           </div>
 
           {/* Flow Direction (Only for Sankey) */}
-          {chartVisualMode === 'sankey_clean' && (
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-slate-400 text-[11px] font-medium">جهت جریان:</span>
-              <div className="flex bg-slate-900 rounded-lg p-0.5 border border-slate-700/60">
-                <button
-                  onClick={() => setSankeyDirection('both')}
-                  className={`px-2 py-1 rounded-md text-xs font-medium ${
-                    sankeyDirection === 'both' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  ورود و خروج کامل
-                </button>
-                <button
-                  onClick={() => setSankeyDirection('inflow_only')}
-                  className={`px-2 py-1 rounded-md text-xs font-medium ${
-                    sankeyDirection === 'inflow_only' ? 'bg-emerald-600 text-white' : 'text-emerald-400 hover:text-emerald-200'
-                  }`}
-                >
-                  فقط ورود 🟢
-                </button>
-                <button
-                  onClick={() => setSankeyDirection('outflow_only')}
-                  className={`px-2 py-1 rounded-md text-xs font-medium ${
-                    sankeyDirection === 'outflow_only' ? 'bg-rose-600 text-white' : 'text-rose-400 hover:text-rose-200'
-                  }`}
-                >
-                  فقط خروج 🔴
-                </button>
-              </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-slate-400 text-[11px] font-medium">جهت جریان:</span>
+            <div className="flex bg-slate-900 rounded-lg p-0.5 border border-slate-700/60">
+              <button
+                onClick={() => setSankeyDirection('both')}
+                className={`px-2 py-1 rounded-md text-xs font-medium ${
+                  sankeyDirection === 'both' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                ورود و خروج کامل
+              </button>
+              <button
+                onClick={() => setSankeyDirection('inflow_only')}
+                className={`px-2 py-1 rounded-md text-xs font-medium ${
+                  sankeyDirection === 'inflow_only' ? 'bg-emerald-600 text-white' : 'text-emerald-400 hover:text-emerald-200'
+                }`}
+              >
+                فقط ورود 🟢
+              </button>
+              <button
+                onClick={() => setSankeyDirection('outflow_only')}
+                className={`px-2 py-1 rounded-md text-xs font-medium ${
+                  sankeyDirection === 'outflow_only' ? 'bg-rose-600 text-white' : 'text-rose-400 hover:text-rose-200'
+                }`}
+              >
+                فقط خروج 🔴
+              </button>
             </div>
-          )}
+          </div>
 
           {/* Solo Coin Isolator */}
           <div className="flex items-center gap-1.5 text-xs">
@@ -1371,9 +1665,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
           </div>
         </div>
 
-        {/* --- VIEW 1: CLEAN SANKEY FLOW --- */}
-        {chartVisualMode === 'sankey_clean' && (
-          <div>
+        <div>
             <div className="flex items-center justify-between text-xs text-slate-400 mb-2 px-1">
               <div className="flex items-center gap-2">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
@@ -1409,184 +1701,6 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
               <span>تعداد رمزارزهای در حال نمایش: {sankeyDensity === 'top8' ? '۸ لیدر بازار' : sankeyDensity === 'top15' ? '۱۵ ارز برتر' : 'نمایش کامل'}</span>
             </div>
           </div>
-        )}
-
-        {/* --- VIEW 2: BI-DIRECTIONAL NET CASH FLOW (DIVERGENCE BARS) --- */}
-        {chartVisualMode === 'bidirectional_bar' && (
-          <div>
-            <div className="flex items-center justify-between text-xs text-slate-400 mb-3 px-1">
-              <div className="flex items-center gap-2 text-rose-400 font-bold">
-                <ArrowDownRight className="w-4 h-4" />
-                <span>خروج نقدینگی / فروش (سمت چپ 🔴)</span>
-              </div>
-              <div className="text-center font-bold text-slate-300">
-                <span>ترازنامه بلادرنگ ورود در برابر خروج نقدینگی</span>
-              </div>
-              <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                <span>ورود نقدینگی / خرید (سمت راست 🟢)</span>
-                <ArrowUpRight className="w-4 h-4" />
-              </div>
-            </div>
-
-            <div className="w-full h-[520px] bg-slate-950/40 rounded-xl p-4 border border-slate-800/60">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={biDirectionalBarData}
-                  layout="vertical"
-                  margin={{ top: 10, right: 30, left: 30, bottom: 10 }}
-                >
-                  <XAxis
-                    type="number"
-                    stroke="#64748B"
-                    tickFormatter={(val) => {
-                      const abs = Math.abs(val);
-                      if (activeViewMode === 'toman') {
-                        if (abs >= 1e12) return `${(abs / 1e12).toFixed(1)}T`;
-                        if (abs >= 1e9) return `${(abs / 1e9).toFixed(0)}B`;
-                        if (abs >= 1e6) return `${(abs / 1e6).toFixed(0)}M`;
-                      } else {
-                        if (abs >= 1e6) return `$${(abs / 1e6).toFixed(1)}M`;
-                        if (abs >= 1e3) return `$${(abs / 1e3).toFixed(0)}K`;
-                      }
-                      return `${abs}`;
-                    }}
-                    tick={{ fill: '#94A3B8', fontSize: 11 }}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="symbol"
-                    stroke="#64748B"
-                    width={70}
-                    tick={{ fill: '#F8FAFC', fontSize: 12, fontWeight: 'bold' }}
-                  />
-                  <RechartsTooltip
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const item = payload[0].payload;
-                        return (
-                          <div className="bg-slate-900 border border-slate-700 p-3 rounded-xl shadow-2xl text-xs text-right font-sans min-w-[200px]">
-                            <div className="font-bold text-white text-sm mb-1 flex items-center justify-between border-b border-slate-800 pb-1">
-                              <span className="text-blue-400 font-mono">{item.symbol}</span>
-                              <span className="text-slate-300">{item.nameFa}</span>
-                            </div>
-                            <div className="text-emerald-400 mt-2 flex justify-between">
-                              <span>🟢 کل ورود پول (خرید):</span>
-                              <span className="font-mono font-bold">
-                                {activeViewMode === 'toman' ? formatToman(item.inflowToman) : formatUsdt(item.inflowToman / (data?.usdtPriceToman || 234600))}
-                              </span>
-                            </div>
-                            <div className="text-rose-400 mt-1 flex justify-between">
-                              <span>🔴 کل خروج پول (فروش):</span>
-                              <span className="font-mono font-bold">
-                                {activeViewMode === 'toman' ? formatToman(item.outflowPositive) : formatUsdt(item.outflowPositive / (data?.usdtPriceToman || 234600))}
-                              </span>
-                            </div>
-                            <div className={`mt-2 pt-2 border-t border-slate-800 font-bold flex justify-between ${item.netFlowToman >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              <span>⚡ خالص جریان (Net):</span>
-                              <span className="font-mono">
-                                {item.netFlowToman >= 0 ? '+' : ''}
-                                {activeViewMode === 'toman' ? formatToman(item.netFlowToman) : formatUsdt(item.netFlowToman / (data?.usdtPriceToman || 234600))}
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-400 mt-1">
-                              نسبت برتری: {item.buyPressure.toFixed(0)}٪ خرید در برابر {item.sellPressure.toFixed(0)}٪ فروش
-                            </div>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
-                  <ReferenceLine x={0} stroke="#475569" strokeWidth={2} />
-                  {/* Left Side: Outflows (Negative values) */}
-                  <Bar dataKey="displayOutflow" fill="#EF4444" radius={[4, 0, 0, 4]} name="خروج پول" />
-                  {/* Right Side: Inflows (Positive values) */}
-                  <Bar dataKey="displayInflow" fill="#10B981" radius={[0, 4, 4, 0]} name="ورود پول" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="flex items-center justify-between text-[11px] text-slate-500 mt-2 px-2">
-              <span>💡 این نمودار بدون هیچ خطوط متقاطعی، دقیقاً تراز خرید و فروش هر رمزارز را در ۲ جهت نمایش می‌دهد.</span>
-              <span className="text-emerald-400 font-bold">سبز: ورود سرمایه | <span className="text-rose-400">قرمز: خروج سرمایه</span></span>
-            </div>
-          </div>
-        )}
-
-        {/* --- VIEW 3: CAPITAL ROTATION MATRIX --- */}
-        {chartVisualMode === 'matrix_rotation' && (
-          <div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {filteredCoins.slice(0, 12).map((coin) => {
-                const isNetInflow = coin.flowStatus === 'NET_INFLOW';
-                const isNetOutflow = coin.flowStatus === 'NET_OUTFLOW';
-
-                return (
-                  <div
-                    key={coin.symbol}
-                    onClick={() => {
-                      setSelectedSoloCoin(coin.symbol);
-                      setChartVisualMode('sankey_clean');
-                    }}
-                    className={`p-4 rounded-xl border transition-all cursor-pointer hover:scale-[1.02] ${
-                      isNetInflow
-                        ? 'bg-emerald-950/20 border-emerald-800/40 hover:border-emerald-500'
-                        : isNetOutflow
-                        ? 'bg-rose-950/20 border-rose-800/40 hover:border-rose-500'
-                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-black font-mono text-sm text-white">{coin.symbol}</span>
-                        <span className="text-[11px] text-slate-400">{coin.nameFa}</span>
-                      </div>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        isNetInflow ? 'bg-emerald-500/20 text-emerald-400' : isNetOutflow ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-800 text-slate-400'
-                      }`}>
-                        {isNetInflow ? 'ورود خالص' : isNetOutflow ? 'خروج خالص' : 'متعادل'}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1 text-xs">
-                      <div className="flex justify-between text-slate-400">
-                        <span>ورود:</span>
-                        <span className="text-emerald-400 font-mono font-bold">
-                          {activeViewMode === 'toman' ? formatToman(coin.inflowToman) : formatUsdt(coin.inflowUsdt)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span>خروج:</span>
-                        <span className="text-rose-400 font-mono font-bold">
-                          {activeViewMode === 'toman' ? formatToman(coin.outflowToman) : formatUsdt(coin.outflowUsdt)}
-                        </span>
-                      </div>
-                      <div className="pt-2 border-t border-slate-800/80 flex justify-between font-bold">
-                        <span>خالص جریان:</span>
-                        <span className={`font-mono ${coin.netFlowToman >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {coin.netFlowToman >= 0 ? '+' : ''}
-                          {activeViewMode === 'toman' ? formatToman(coin.netFlowToman) : formatUsdt(coin.netFlowUsdt)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Dominance Bar */}
-                    <div className="mt-3">
-                      <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden flex">
-                        <div style={{ width: `${coin.buyPressurePercent}%` }} className="bg-emerald-500 h-full"></div>
-                        <div style={{ width: `${coin.sellPressurePercent}%` }} className="bg-rose-500 h-full"></div>
-                      </div>
-                      <div className="flex justify-between text-[9px] text-slate-400 mt-1 font-mono">
-                        <span>{coin.buyPressurePercent.toFixed(0)}٪ خرید</span>
-                        <span>{coin.sellPressurePercent.toFixed(0)}٪ فروش</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 5. DETAILED ALL-COINS FLOW TABLE WITH INSTANT SEARCH */}
@@ -1660,19 +1774,28 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
               {filteredCoins.map((coin) => {
                 const isNetInflow = coin.flowStatus === 'NET_INFLOW';
                 const isNetOutflow = coin.flowStatus === 'NET_OUTFLOW';
+                const radarCoin = getRadarCoin(coin);
 
                 return (
                   <tr
                     key={coin.symbol}
                     onClick={() => {
                       setSelectedSoloCoin(coin.symbol);
+                      openRadarCoin(coin);
                     }}
                     className="hover:bg-slate-800/50 transition-colors cursor-pointer"
                   >
                     <td className="py-3 px-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono font-black text-sm text-white">{coin.symbol}</span>
                         <span className="text-slate-400 text-xs">{coin.nameFa}</span>
+                        <SevenExchangeSignalBadge
+                          coin={radarCoin}
+                          nameFa={coin.nameFa}
+                          onSelect={(selectedCoin, selectedName) =>
+                            setSelectedRadarCoin({ coin: selectedCoin, nameFa: selectedName })
+                          }
+                        />
                       </div>
                     </td>
                     <td className="py-3 px-3 font-mono">
@@ -1722,6 +1845,14 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
           </table>
         </div>
       </div>
+      {selectedRadarCoin && typeof document !== 'undefined' && createPortal(
+        <SevenExchangeRadarModal
+          coin={selectedRadarCoin.coin}
+          nameFa={selectedRadarCoin.nameFa}
+          onClose={() => setSelectedRadarCoin(null)}
+        />,
+        document.body,
+      )}
     </div>
   );
 }

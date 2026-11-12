@@ -35,7 +35,7 @@ export default function UsdtMoneyFlowSankey({
         nodeAlign: 'justify',
         layoutIterations: 32,
         left: 20,
-        right: 20,
+        right: 150,
         top: 18,
         bottom: 18,
         nodeWidth: 18,
@@ -87,7 +87,7 @@ export default function UsdtMoneyFlowSankey({
   return (
     <section
       aria-label={lang === 'fa' ? 'نمودار جریان سرمایه تتر' : 'USDT money flow Sankey'}
-      className={`mt-4 rounded-xl border p-3 sm:p-4 ${
+      className={`mt-4 overflow-visible rounded-xl border p-3 sm:p-4 ${
         isDark ? 'border-slate-800 bg-slate-950/50' : 'border-slate-200 bg-white'
       }`}
     >
@@ -98,7 +98,7 @@ export default function UsdtMoneyFlowSankey({
         option={option}
         notMerge
         lazyUpdate
-        style={{ height: 220, width: '100%' }}
+        style={{ height: 220, width: '100%', overflow: 'visible' }}
       />
     </section>
   );

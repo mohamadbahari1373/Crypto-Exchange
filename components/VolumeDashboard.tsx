@@ -11,13 +11,9 @@ import {
   Layers,
   BarChart3,
   CheckCircle2,
-  ExternalLink,
   HelpCircle,
-  Clock,
   ArrowUpRight,
-  Sparkles,
   Zap,
-  Target,
   Users,
   Coins,
   Search,
@@ -29,6 +25,7 @@ import {
 } from 'lucide-react';
 import NewsFeed from '@/components/NewsFeed';
 import MoneyFlowSankey from '@/components/MoneyFlowSankey';
+import MarketPulseDashboard from '@/components/MarketPulseDashboard';
 import DidehbonLogo, { DidehbonLogoIcon } from '@/components/DidehbonLogo';
 import {
   ResponsiveContainer,
@@ -54,16 +51,14 @@ export default function VolumeDashboard() {
   const [data, setData] = useState<VolumeApiResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
-  const [secondsAgo, setSecondsAgo] = useState<number>(0);
 
   // User Preferences
   const [lang, setLang] = useState<Language>('fa');
   const [theme, setTheme] = useState<Theme>('dark');
-  const [displayMode, setDisplayMode] = useState<NumberDisplayMode>('hemat');
+  const displayMode: NumberDisplayMode = 'full';
   const [userExchangeId, setUserExchangeId] = useState<string>('wallex'); // Wallex default as user is from Wallex
-  const [mainSection, setMainSection] = useState<'volumes' | 'flow' | 'news'>('news');
-  const [activeTab, setActiveTab] = useState<'table' | 'coins' | 'cx' | 'security'>('coins');
+  const [mainSection, setMainSection] = useState<'volumes' | 'flow' | 'news' | 'marketpulse'>('news');
+  const [activeTab, setActiveTab] = useState<'table' | 'coins'>('coins');
   const [selectedCoinSymbol, setSelectedCoinSymbol] = useState<string>('ALL');
   const [coinSearchQuery, setCoinSearchQuery] = useState<string>('');
   const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
@@ -80,8 +75,6 @@ export default function VolumeDashboard() {
       if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
       const json: VolumeApiResponse = await res.json();
       setData(json);
-      setLastRefreshedAt(new Date());
-      setSecondsAgo(0);
     } catch (err: any) {
       setError(err.message || 'خطا در برقراری ارتباط');
     } finally {
@@ -98,8 +91,6 @@ export default function VolumeDashboard() {
         const json: VolumeApiResponse = await res.json();
         if (isMounted) {
           setData(json);
-          setLastRefreshedAt(new Date());
-          setSecondsAgo(0);
           setLoading(false);
         }
       } catch (err: any) {
@@ -119,14 +110,6 @@ export default function VolumeDashboard() {
       clearInterval(interval);
     };
   }, []);
-
-  // Update "seconds ago" timer
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSecondsAgo(Math.floor((Date.now() - lastRefreshedAt.getTime()) / 1000));
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [lastRefreshedAt]);
 
   // Selected Exchange Data
   const selectedExchange = useMemo(() => {
@@ -278,65 +261,26 @@ export default function VolumeDashboard() {
                 <span>{t.navVolumes}</span>
               </button>
 
+              <button
+                id="btn-nav-marketpulse"
+                onClick={() => setMainSection('marketpulse')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  mainSection === 'marketpulse'
+                    ? isDark
+                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
+                      : 'bg-white text-blue-700 shadow-xs'
+                    : isDark
+                    ? 'text-slate-400 hover:text-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                aria-pressed={mainSection === 'marketpulse'}
+              >
+                <span>🔥 نبض بازار</span>
+              </button>
+
             </div>
 
             <div className={`h-5 w-px ${isDark ? 'bg-slate-800' : 'bg-slate-300'}`} />
-
-            {/* Display Mode Toggle (Hemat vs Billion vs Full) */}
-            <div
-              className={`flex items-center p-0.5 rounded-lg border text-xs font-medium ${
-                isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-100 border-slate-200'
-              }`}
-            >
-              <button
-                id="btn-mode-hemat"
-                onClick={() => setDisplayMode('hemat')}
-                className={`px-2.5 py-1 rounded-md transition-all ${
-                  displayMode === 'hemat'
-                    ? isDark
-                      ? 'bg-slate-800 text-blue-400 font-semibold shadow-sm'
-                      : 'bg-white text-blue-700 font-semibold shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title={t.displayModeHemat}
-              >
-                {lang === 'fa' ? 'همت' : 'Hemat'}
-              </button>
-              <button
-                id="btn-mode-compact"
-                onClick={() => setDisplayMode('compact')}
-                className={`px-2.5 py-1 rounded-md transition-all ${
-                  displayMode === 'compact'
-                    ? isDark
-                      ? 'bg-slate-800 text-blue-400 font-semibold shadow-sm'
-                      : 'bg-white text-blue-700 font-semibold shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title={t.displayModeCompact}
-              >
-                {lang === 'fa' ? 'میلیارد' : 'Billion'}
-              </button>
-              <button
-                id="btn-mode-full"
-                onClick={() => setDisplayMode('full')}
-                className={`px-2.5 py-1 rounded-md transition-all ${
-                  displayMode === 'full'
-                    ? isDark
-                      ? 'bg-slate-800 text-blue-400 font-semibold shadow-sm'
-                      : 'bg-white text-blue-700 font-semibold shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title={t.displayModeFull}
-              >
-                {lang === 'fa' ? 'کامل' : 'Full'}
-              </button>
-            </div>
 
             {/* Language Switcher */}
             <button
@@ -367,27 +311,13 @@ export default function VolumeDashboard() {
               {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            {/* Refresh Button */}
-            <button
-              id="btn-refresh"
-              onClick={fetchData}
-              disabled={loading}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                loading
-                  ? 'opacity-60 cursor-not-allowed'
-                  : isDark
-                  ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm shadow-blue-900/30'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
-              }`}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{t.refresh}</span>
-            </button>
           </div>
         </header>
 
         {/* MAIN SECTION CONDITIONAL: VOLUMES VS FLOW VS NEWS */}
-        {mainSection === 'flow' ? (
+        {mainSection === 'marketpulse' ? (
+          <MarketPulseDashboard />
+        ) : mainSection === 'flow' ? (
           <MoneyFlowSankey isDark={isDark} lang={lang} />
         ) : mainSection === 'news' ? (
           <NewsFeed lang={lang} theme={theme} />
@@ -427,32 +357,6 @@ export default function VolumeDashboard() {
           </div>
         ) : (
           <>
-            {/* REFRESH STATUS STRIP */}
-            <div
-              className={`flex items-center justify-between text-xs px-2 -mt-2 ${
-                isDark ? 'text-slate-400' : 'text-slate-500'
-              }`}
-            >
-          <div className="flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>
-              {t.lastUpdate}:{' '}
-              {secondsAgo < 5
-                ? t.justNow
-                : `${lang === 'fa' ? toPersianDigits(secondsAgo) : secondsAgo} ${t.secondsAgo}`}
-            </span>
-          </div>
-          {data?.cached && (
-            <span
-              className={`text-[11px] px-2 py-0.5 rounded ${
-                isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200/70 text-slate-600'
-              }`}
-            >
-              {t.statusCached} ({lang === 'fa' ? toPersianDigits(data.cacheAgeSeconds || 0) : data.cacheAgeSeconds}s)
-            </span>
-          )}
-        </div>
-
         {/* 4 CORE KPI METRICS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Card 1: Total Market Volume */}
@@ -742,49 +646,6 @@ export default function VolumeDashboard() {
             <span>{t.tabComparison}</span>
           </button>
 
-          <button
-            id="tab-btn-cx"
-            onClick={() => setActiveTab('cx')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-t-lg transition-all border-b-2 -mb-1 whitespace-nowrap ${
-              activeTab === 'cx'
-                ? 'border-blue-500 text-blue-500 bg-blue-500/10'
-                : isDark
-                ? 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Target className="w-4 h-4" />
-            <span>{t.tabCxAnalysis}</span>
-          </button>
-
-          <button
-            id="tab-btn-security"
-            onClick={() => setActiveTab('security')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-t-lg transition-all border-b-2 -mb-1 whitespace-nowrap ${
-              activeTab === 'security'
-                ? 'border-blue-500 text-blue-500 bg-blue-500/10'
-                : isDark
-                ? 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            <span>{t.tabSecurity}</span>
-          </button>
-
-          <button
-            id="tab-btn-flow-shortcut"
-            onClick={() => setMainSection('flow')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-t-lg transition-all border-b-2 -mb-1 whitespace-nowrap ${
-              isDark
-                ? 'border-transparent text-amber-400 hover:bg-amber-500/10'
-                : 'border-transparent text-amber-600 hover:bg-amber-50'
-            }`}
-          >
-            <ArrowRightLeft className="w-4 h-4" />
-            <span>{lang === 'fa' ? 'جریان زنده پول (Sankey)' : 'Money Flow (Sankey)'}</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          </button>
         </div>
 
         {/* TAB 1: COMPARISON TABLE */}
@@ -1462,368 +1323,6 @@ export default function VolumeDashboard() {
           </div>
         )}
 
-        {/* TAB 2: CX & COMPETITIVE ANALYSIS */}
-        {activeTab === 'cx' && (
-          <div id="section-cx-analysis" className="flex flex-col gap-5">
-            {/* Header banner */}
-            <div
-              className={`p-4 rounded-xl border ${
-                isDark
-                  ? 'bg-[#0F172A] border-slate-800/80'
-                  : 'bg-white border-slate-200'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <Target className="w-5 h-5 text-blue-400" />
-                <h2 className="text-base sm:text-lg font-bold">
-                  {t.cxSectionTitle}
-                </h2>
-              </div>
-              <p
-                className={`text-xs mt-1 max-w-3xl ${
-                  isDark ? 'text-slate-400' : 'text-slate-600'
-                }`}
-              >
-                {t.cxSectionSubtitle}
-              </p>
-            </div>
-
-            {/* Gap Analysis Card */}
-            <div
-              className={`p-5 rounded-xl border ${
-                isDark
-                  ? 'bg-[#0F172A] border-blue-900/40'
-                  : 'bg-white border-blue-200'
-              }`}
-            >
-              <h3 className="text-sm font-bold text-blue-400 mb-2">
-                {t.gapAnalysisTitle}
-              </h3>
-              <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                {t.gapAnalysisDesc}
-              </p>
-
-              {/* Comparative Stats Box */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
-                <div
-                  className={`p-3 rounded-lg border ${
-                    isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-50 border-slate-200'
-                  }`}
-                >
-                  <span className={`text-[11px] block ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {lang === 'fa' ? 'صرافی مبنای شما' : 'Your Exchange'} (
-                    {lang === 'fa' ? selectedExchange?.nameFa : selectedExchange?.nameEn})
-                  </span>
-                  <span className="text-base font-bold text-blue-400">
-                    {formatTomanVolume(selectedExchange?.totalVolumeToman || 0, 'compact', lang)}
-                  </span>
-                  <span className="text-[10px] block text-slate-500 mt-0.5">
-                    {formatPercent(selectedExchange?.marketSharePercent || 0, lang)} {t.marketShare}
-                  </span>
-                </div>
-
-                <div
-                  className={`p-3 rounded-lg border ${
-                    isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-50 border-slate-200'
-                  }`}
-                >
-                  <span className={`text-[11px] block ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {lang === 'fa' ? 'رهبر فعلی بازار' : 'Current Market Leader'} (
-                    {lang === 'fa' ? leaderExchange?.nameFa : leaderExchange?.nameEn})
-                  </span>
-                  <span className="text-base font-bold text-amber-400">
-                    {formatTomanVolume(leaderExchange?.totalVolumeToman || 0, 'compact', lang)}
-                  </span>
-                  <span className="text-[10px] block text-slate-500 mt-0.5">
-                    {formatPercent(leaderExchange?.marketSharePercent || 0, lang)} {t.marketShare}
-                  </span>
-                </div>
-
-                <div
-                  className={`p-3 rounded-lg border ${
-                    isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-50 border-slate-200'
-                  }`}
-                >
-                  <span className={`text-[11px] block ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {lang === 'fa' ? 'شکاف نقدینگی و حجم' : 'Volume / Liquidity Gap'}
-                  </span>
-                  <span className="text-base font-bold text-rose-400">
-                    {formatTomanVolume(leaderGapToman, 'compact', lang)}
-                  </span>
-                  <span className="text-[10px] block text-slate-500 mt-0.5">
-                    {selectedExchange?.id === leaderExchange?.id
-                      ? lang === 'fa'
-                        ? 'در صدر بازار'
-                        : 'At the top'
-                      : lang === 'fa'
-                      ? 'کسری سهم جهت رقابت مستقیم'
-                      : 'Deficit to capture leadership'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* 4 Diagnostic Pillars */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Pillar 1: Liquidity & Slippage */}
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="p-1.5 rounded bg-blue-500/10 text-blue-400">
-                    <Zap className="w-4 h-4" />
-                  </div>
-                  <h4 className="text-xs sm:text-sm font-bold">{t.liquidityTitle}</h4>
-                </div>
-                <p
-                  className={`text-xs leading-relaxed ${
-                    isDark ? 'text-slate-300' : 'text-slate-600'
-                  }`}
-                >
-                  {t.liquidityDesc}
-                </p>
-              </div>
-
-              {/* Pillar 2: Market Breadth & Altcoin Agility */}
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="p-1.5 rounded bg-cyan-500/10 text-cyan-400">
-                    <Layers className="w-4 h-4" />
-                  </div>
-                  <h4 className="text-xs sm:text-sm font-bold">{t.marketBreadthTitle}</h4>
-                </div>
-                <p
-                  className={`text-xs leading-relaxed ${
-                    isDark ? 'text-slate-300' : 'text-slate-600'
-                  }`}
-                >
-                  {t.marketBreadthDesc}
-                </p>
-              </div>
-
-              {/* Pillar 3: Instant Swap / OTC UX */}
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="p-1.5 rounded bg-amber-500/10 text-amber-400">
-                    <Sparkles className="w-4 h-4" />
-                  </div>
-                  <h4 className="text-xs sm:text-sm font-bold">{t.onboardingTitle}</h4>
-                </div>
-                <p
-                  className={`text-xs leading-relaxed ${
-                    isDark ? 'text-slate-300' : 'text-slate-600'
-                  }`}
-                >
-                  {t.onboardingDesc}
-                </p>
-              </div>
-
-              {/* Pillar 4: Fiat Settlement Speed */}
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="p-1.5 rounded bg-emerald-500/10 text-emerald-400">
-                    <Clock className="w-4 h-4" />
-                  </div>
-                  <h4 className="text-xs sm:text-sm font-bold">{t.speedTitle}</h4>
-                </div>
-                <p
-                  className={`text-xs leading-relaxed ${
-                    isDark ? 'text-slate-300' : 'text-slate-600'
-                  }`}
-                >
-                  {t.speedDesc}
-                </p>
-              </div>
-            </div>
-
-            {/* Market Share Growth Simulator (Interactive Value for CX Specialist) */}
-            <div
-              className={`p-4 rounded-xl border ${
-                isDark ? 'bg-slate-900/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-300">
-                  {lang === 'fa'
-                    ? 'محاسبه ارزش اقتصادی هر ۱٪ ارتقای سهم بازار'
-                    : 'Economic Value of +1% Market Share Gain'}
-                </span>
-                <span className="text-xs font-bold text-emerald-400">
-                  +
-                  {formatTomanVolume(
-                    (data?.grandTotalToman || 0) * 0.01,
-                    displayMode,
-                    lang
-                  )}
-                </span>
-              </div>
-              <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                {lang === 'fa'
-                  ? `با توجه به مجموع معاملات روزانه بازار، کاهش اصطکاک تجربه کاربری و افزایش تنها ۱٪ سهم بازار، روزانه حجم معاملاتی به ارزش بیش از ${formatTomanVolume(
-                      (data?.grandTotalToman || 0) * 0.01,
-                      'compact',
-                      lang
-                    )} به صرافی شما سرازیر می‌کند.`
-                  : `With total daily market trading volume, capturing just +1% market share from competitors brings ${formatTomanVolume(
-                      (data?.grandTotalToman || 0) * 0.01,
-                      'compact',
-                      lang
-                    )} in incremental volume to your exchange.`}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: PLL SECURITY & API SPECS */}
-        {activeTab === 'security' && (
-          <div id="section-security" className="flex flex-col gap-4">
-            {/* Security Banner */}
-            <div
-              className={`p-5 rounded-xl border ${
-                isDark
-                  ? 'bg-[#0F172A] border-slate-800/80 shadow-lg shadow-black/20'
-                  : 'bg-white border-slate-200 shadow-sm'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-base font-bold">{t.securityTitle}</h3>
-              </div>
-              <p
-                className={`text-xs leading-relaxed ${
-                  isDark ? 'text-slate-400' : 'text-slate-600'
-                }`}
-              >
-                {t.securitySubtitle}
-              </p>
-            </div>
-
-            {/* 3 Security Pillars */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="font-bold text-xs text-blue-400 mb-1.5 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-blue-400" />
-                  {t.ssrfProtectionTitle}
-                </div>
-                <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {t.ssrfProtectionDesc}
-                </p>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="font-bold text-xs text-emerald-400 mb-1.5 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  {t.piiProtectionTitle}
-                </div>
-                <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {t.piiProtectionDesc}
-                </p>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl border ${
-                  isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-                }`}
-              >
-                <div className="font-bold text-xs text-indigo-400 mb-1.5 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-indigo-400" />
-                  {t.rateLimitTitle}
-                </div>
-                <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {t.rateLimitDesc}
-                </p>
-              </div>
-            </div>
-
-            {/* List of APIs Provided by User & Protocol Status */}
-            <div
-              className={`p-4 rounded-xl border ${
-                isDark ? 'bg-[#0F172A] border-slate-800/80' : 'bg-white border-slate-200'
-              }`}
-            >
-              <h4 className="text-xs font-bold mb-3 tracking-wide">
-                {lang === 'fa' ? 'فهرست اندپوینت‌های رسمی صرافی‌ها' : 'Official Exchange API Endpoints & Health'}
-              </h4>
-              <div className="space-y-2 text-xs">
-                {data?.exchanges?.map((ex) => (
-                  <div
-                    key={ex.id}
-                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-lg border gap-2 ${
-                      isDark ? 'bg-slate-900/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-blue-400">
-                        {lang === 'fa' ? ex.nameFa : ex.nameEn}
-                      </span>
-                      <code
-                        className={`text-[11px] px-1.5 py-0.5 rounded font-mono ${
-                          isDark ? 'bg-slate-800 text-slate-300' : 'bg-white text-slate-700'
-                        }`}
-                      >
-                        {ex.apiUrl}
-                      </code>
-                    </div>
-
-                    <div className="flex items-center gap-2 self-end sm:self-auto">
-                      <span
-                        className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                          ex.status === 'live'
-                            ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-800/60'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700'
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            ex.status === 'live' ? 'bg-emerald-400' : 'bg-slate-400'
-                          }`}
-                        />
-                        {ex.status === 'live'
-                          ? lang === 'fa'
-                            ? 'اتصال زنده سرور'
-                            : 'Live Server Connection'
-                          : lang === 'fa'
-                          ? 'پایش داده مرجع'
-                          : 'Benchmark Tracked'}
-                      </span>
-                      <a
-                        href={ex.url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200"
-                        title="Website"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
         </>
         )}
 

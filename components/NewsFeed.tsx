@@ -10,11 +10,9 @@ import {
   Building2,
   TrendingUp,
   Globe,
-  Code2,
   Clock3,
   ExternalLink,
 } from 'lucide-react';
-import NewsApiConsole from './NewsApiConsole';
 import { DidehbonLogoIcon } from '@/components/DidehbonLogo';
 import {
   NewsArticle,
@@ -28,6 +26,41 @@ import { translations } from '@/lib/translations';
 import { toPersianDigits } from '@/lib/formatters';
 
 const NEWS_STORAGE_KEY = 'didehbon-news-feed-v1';
+type NewsOriginFilter = 'all' | 'iranian' | 'foreign';
+
+function normalizeNewsSource(source: string): string {
+  return source.toLowerCase().replace(/[\s\u200c\u200f-]/g, '');
+}
+
+const IRANIAN_NEWS_SOURCES = new Set([
+  'میهن بلاکچین',
+  'ارزدیجیتال',
+  'ارز دیجیتال',
+  'میهن سیگنال',
+  'mihanblockchain',
+  'arzdigital',
+  'mihansignal',
+].map(normalizeNewsSource));
+
+const FOREIGN_NEWS_SOURCES = new Set([
+  'کریپتو پوتیتو',
+  'cryptopotato',
+  'کوین‌مارکت‌کپ',
+  'کوین مارکت کپ',
+  'coinmarketcap',
+  'کوین‌دسک',
+  'کوین دسک',
+  'coindesk',
+  'کوین‌تلگراف',
+  'کوین تلگراف',
+  'cointelegraph',
+].map(normalizeNewsSource));
+
+function matchesNewsOrigin(article: NewsArticle, origin: Exclude<NewsOriginFilter, 'all'>): boolean {
+  const sources = origin === 'iranian' ? IRANIAN_NEWS_SOURCES : FOREIGN_NEWS_SOURCES;
+  return [article.source, article.sourceNameFa, article.sourceNameEn]
+    .some((source) => sources.has(normalizeNewsSource(source)));
+}
 
 function isNewsApiResponse(data: unknown): data is NewsApiResponse {
   return typeof data === 'object' && data !== null
@@ -354,13 +387,12 @@ const Live3DClock = memo(function Live3DClock({ isDark, lang }: Live3DClockProps
 });
 
 export default function NewsFeed({ lang, theme }: NewsFeedProps) {
-  const [newsSectionTab, setNewsSectionTab] = useState<'feed' | 'api'>('feed');
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<NewsCategoryFilter>('all');
-  const [sourceFilter, setSourceFilter] = useState<NewsSourceId>('all');
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState<NewsOriginFilter>('all');
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [showPersianByArticle, setShowPersianByArticle] = useState<Record<string, boolean>>({});
   const [persianTranslations, setPersianTranslations] = useState<
@@ -427,8 +459,7 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
   // Filtered Articles
   const filteredArticles = useMemo(() => {
     return articles.filter((art) => {
-      // Source filter
-      if (sourceFilter !== 'all' && art.source !== sourceFilter) {
+      if (activeCategoryFilter !== 'all' && !matchesNewsOrigin(art, activeCategoryFilter)) {
         return false;
       }
       // Category filter
@@ -451,7 +482,7 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
       }
       return true;
     });
-  }, [articles, sourceFilter, categoryFilter, searchQuery]);
+  }, [articles, activeCategoryFilter, categoryFilter, searchQuery]);
 
   // Counts for tabs
   const exchangeCount = useMemo(
@@ -490,43 +521,6 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
                   didehbon.ir
                 </span>
               </div>
-
-              {/* Sub-view switcher: Feed vs API */}
-              <div
-                className={`flex items-center p-0.5 rounded-xl border ${
-                  isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
-                }`}
-              >
-                <button
-                  id="tab-news-feed"
-                  onClick={() => setNewsSectionTab('feed')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    newsSectionTab === 'feed'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : isDark
-                      ? 'text-slate-400 hover:text-slate-200'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Newspaper className="w-3.5 h-3.5" />
-                  <span>{lang === 'fa' ? 'فید اخبار' : 'News Feed'}</span>
-                </button>
-                <button
-                  id="tab-news-api"
-                  onClick={() => setNewsSectionTab('api')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    newsSectionTab === 'api'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : isDark
-                      ? 'text-slate-400 hover:text-slate-200'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Code2 className="w-3.5 h-3.5" />
-                  <span>{lang === 'fa' ? 'سرویس API و وب‌هوک' : 'API Hub'}</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                </button>
-              </div>
             </div>
           </div>
 
@@ -550,10 +544,8 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
           </div>
         </div>
 
-        {/* SEARCH AND FILTER BUTTONS (ONLY IN FEED MODE) */}
-        {newsSectionTab === 'feed' && (
-          <>
-            <div className="mt-4 flex flex-col gap-3">
+        {/* SEARCH AND FILTER BUTTONS */}
+        <div className="mt-4 flex flex-col gap-3">
               {/* Search Box */}
               <div className="relative w-full">
                 <Search
@@ -657,117 +649,28 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
                     isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-100 border-slate-200'
                   }`}
                 >
-                <button
-                  id="filter-source-all"
-                  onClick={() => setSourceFilter('all')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'all'
-                      ? isDark
-                        ? 'bg-slate-800 text-slate-100 font-semibold shadow-sm'
-                        : 'bg-white text-slate-900 font-semibold shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceAll}
-                </button>
-
-                <button
-                  id="filter-source-arzdigital"
-                  onClick={() => setSourceFilter('arzdigital')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'arzdigital'
-                      ? isDark
-                        ? 'bg-emerald-950/80 text-emerald-300 font-semibold shadow-sm border border-emerald-800/60'
-                        : 'bg-emerald-50 text-emerald-800 font-semibold shadow-xs border border-emerald-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceArzdigital}
-                </button>
-
-                <button
-                  id="filter-source-mihansignal"
-                  onClick={() => setSourceFilter('mihansignal')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'mihansignal'
-                      ? isDark
-                        ? 'bg-amber-950/80 text-amber-300 font-semibold shadow-sm border border-amber-800/60'
-                        : 'bg-amber-50 text-amber-800 font-semibold shadow-xs border border-amber-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceMihansignal}
-                </button>
-
-                <button
-                  id="filter-source-mihanblockchain"
-                  onClick={() => setSourceFilter('mihanblockchain')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'mihanblockchain'
-                      ? isDark
-                        ? 'bg-cyan-950/80 text-cyan-300 font-semibold shadow-sm border border-cyan-800/60'
-                        : 'bg-cyan-50 text-cyan-800 font-semibold shadow-xs border border-cyan-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceMihanblockchain}
-                </button>
-
-                <button
-                  id="filter-source-cryptopotato"
-                  onClick={() => setSourceFilter('cryptopotato')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'cryptopotato'
-                      ? isDark
-                        ? 'bg-purple-950/80 text-purple-300 font-semibold shadow-sm border border-purple-800/60'
-                        : 'bg-purple-50 text-purple-800 font-semibold shadow-xs border border-purple-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceCryptopotato}
-                </button>
-
-                <button
-                  id="filter-source-coindesk"
-                  onClick={() => setSourceFilter('coindesk')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'coindesk'
-                      ? isDark
-                        ? 'bg-sky-950/80 text-sky-300 font-semibold shadow-sm border border-sky-800/60'
-                        : 'bg-sky-50 text-sky-800 font-semibold shadow-xs border border-sky-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceCoindesk}
-                </button>
-
-                <button
-                  id="filter-source-coinmarketcap"
-                  onClick={() => setSourceFilter('coinmarketcap')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'coinmarketcap'
-                      ? isDark
-                        ? 'bg-lime-950/80 text-lime-300 font-semibold shadow-sm border border-lime-800/60'
-                        : 'bg-lime-50 text-lime-800 font-semibold shadow-xs border border-lime-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceCoinmarketcap}
-                </button>
-
-                <button
-                  id="filter-source-cointelegraph"
-                  onClick={() => setSourceFilter('cointelegraph')}
-                  className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
-                    sourceFilter === 'cointelegraph'
-                      ? isDark
-                        ? 'bg-fuchsia-950/80 text-fuchsia-300 font-semibold shadow-sm border border-fuchsia-800/60'
-                        : 'bg-fuchsia-50 text-fuchsia-800 font-semibold shadow-xs border border-fuchsia-200'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {t.newsSourceCointelegraph}
-                </button>
+                  {(['all', 'iranian', 'foreign'] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      id={`filter-source-${filter}`}
+                      onClick={() => setActiveCategoryFilter(filter)}
+                      className={`shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-md transition-all ${
+                        activeCategoryFilter === filter
+                          ? isDark
+                            ? 'bg-slate-800 text-slate-100 font-semibold shadow-sm'
+                            : 'bg-white text-slate-900 font-semibold shadow-xs'
+                          : isDark
+                          ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                      }`}
+                    >
+                      {filter === 'all'
+                        ? (lang === 'fa' ? 'همه' : 'All')
+                        : filter === 'iranian'
+                        ? (lang === 'fa' ? 'اخبار ایرانی' : 'Iranian News')
+                        : (lang === 'fa' ? 'اخبار خارجی' : 'Foreign News')}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -780,14 +683,9 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
                   : `${filteredArticles.length} ${t.newsFilterCount}`}
               </span>
             </div>
-          </>
-        )}
       </div>
 
-      {/* RENDER ACTIVE TAB: API CONSOLE OR ARTICLES GRID */}
-      {newsSectionTab === 'api' ? (
-        <NewsApiConsole lang={lang} isDark={isDark} />
-      ) : filteredArticles.length === 0 ? (
+      {filteredArticles.length === 0 ? (
         <div
           className={`p-12 text-center rounded-xl border ${
             isDark ? 'bg-[#0F172A] border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-600'

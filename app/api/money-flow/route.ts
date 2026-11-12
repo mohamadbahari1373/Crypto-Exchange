@@ -14,6 +14,7 @@ interface WallexHectorMarket {
   change_24h: number | string;
   volume_24h: number | string;
   quote_volume_24h: number | string;
+  '24h_quote_volume'?: number | string;
   highest_24h_price?: string;
   lowest_24h_price?: string;
   is_spot?: boolean;
@@ -287,7 +288,12 @@ export async function GET(req: Request) {
       const rawChangeStr = m.change_24h !== undefined ? m.change_24h : (m.stats?.['24h_ch'] || m.stats?.percentChange24h || '0');
       const change = (rawChangeStr === '-' || isNaN(parseFloat(rawChangeStr))) ? 0 : parseFloat(rawChangeStr);
 
-      const rawQuoteVolStr = m.quote_volume_24h !== undefined ? m.quote_volume_24h : (m.stats?.['24h_quoteVolume'] || m.stats?.['24h_tmnVolume'] || '0');
+      const rawQuoteVolStr = m.quote_volume_24h
+        ?? m['24h_quote_volume']
+        ?? m.stats?.['24h_quote_volume']
+        ?? m.stats?.['24h_quoteVolume']
+        ?? m.stats?.['24h_tmnVolume']
+        ?? '0';
       const quoteVol = (rawQuoteVolStr === '-' || isNaN(parseFloat(rawQuoteVolStr))) ? 0 : parseFloat(rawQuoteVolStr);
 
       const rawBaseVolStr = m.volume_24h !== undefined ? m.volume_24h : (m.stats?.['24h_volume'] || '0');
@@ -551,6 +557,7 @@ export async function GET(req: Request) {
         netFlowToman: c.netFlowToman,
         inflowToman: c.inflowToman,
         outflowToman: c.outflowToman,
+        volume24hToman: c.totalVolumeToman,
         buyPressurePercent: c.buyPressurePercent,
         priceChange24h: c.priceChange24h,
       }));
@@ -565,6 +572,7 @@ export async function GET(req: Request) {
         netFlowToman: Math.abs(c.netFlowToman),
         inflowToman: c.inflowToman,
         outflowToman: c.outflowToman,
+        volume24hToman: c.totalVolumeToman,
         sellPressurePercent: c.sellPressurePercent,
         priceChange24h: c.priceChange24h,
       }));
