@@ -196,6 +196,15 @@ function news_n8n_payload(array $payload): array
         return [
             'title' => news_text($title),
             'summary' => news_text($article['summary'] ?? $article['excerpt'] ?? ''),
+            'fullContent' => news_text(
+                $article['fullContent']
+                    ?? $article['content']
+                    ?? $article['body']
+                    ?? $article['description']
+                    ?? $article['summary']
+                    ?? $article['excerpt']
+                    ?? ''
+            ),
             'image_url' => $imageUrl,
             'url' => is_string($article['url'] ?? null)
                 ? $article['url']
@@ -376,10 +385,11 @@ function news_category(string $title, string $summary): array
     return ['general', 'عمومی'];
 }
 
-function news_article(string $source, string $title, string $summary, string $url, string $publishedAt, string $author = '', string $imageUrl = ''): ?array
+function news_article(string $source, string $title, string $summary, string $url, string $publishedAt, string $author = '', string $imageUrl = '', string $fullContent = ''): ?array
 {
     $title = news_text($title);
     $summary = news_text($summary);
+    $fullContent = news_text($fullContent !== '' ? $fullContent : $summary);
     $url = trim($url);
     if ($title === '' || !filter_var($url, FILTER_VALIDATE_URL) || !in_array(parse_url($url, PHP_URL_SCHEME), ['http', 'https'], true)) {
         return null;
@@ -393,6 +403,7 @@ function news_article(string $source, string $title, string $summary, string $ur
         'id' => $source . '-' . substr(hash('sha256', $url), 0, 16),
         'title' => $title,
         'summary' => $summary,
+        'fullContent' => $fullContent,
         'url' => $url,
         'source' => $source,
         'sourceNameFa' => $metadata['nameFa'],
@@ -503,7 +514,8 @@ function news_parse_wordpress(string $source, ?string $body): array
             $item['link'] ?? '',
             $item['date_gmt'] ?? $item['date'] ?? '',
             is_string($author) ? $author : '',
-            is_string($image) ? $image : ''
+            is_string($image) ? $image : '',
+            is_string($item['content']['rendered'] ?? null) ? $item['content']['rendered'] : ''
         );
         if ($article !== null) {
             $articles[] = $article;
@@ -570,7 +582,8 @@ function news_parse_rss(string $source, ?string $body): array
             $link,
             news_xml_value($item->pubDate ?? $item->published ?? $item->updated ?? ''),
             $author,
-            $image
+            $image,
+            $fullContent
         );
         if ($article !== null) {
             $articles[] = $article;

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import SmoothScroll from '@/components/SmoothScroll';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -73,6 +74,7 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased min-h-screen selection:bg-slate-700 selection:text-white" suppressHydrationWarning>
+        <SmoothScroll />
         {children}
       </body>
     </html>

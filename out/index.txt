@@ -1,16 +1,17 @@
 1:"$Sreact.fragment"
-3:I[128,[],""]
-4:I[6479,["39","static/chunks/app/error-06385bd1a5b87ffb.js"],"default"]
-5:I[1014,[],""]
-6:I[9425,["345","static/chunks/app/not-found-b8454733e75f5762.js"],""]
-7:I[4814,["548","static/chunks/548-62db4a5c7aa1ed68.js","974","static/chunks/app/page-bb1d5c0a6a7512ef.js"],"default"]
-8:I[5965,[],"OutletBoundary"]
-a:I[2616,[],"AsyncMetadataOutlet"]
-c:I[5965,[],"ViewportBoundary"]
-e:I[5965,[],"MetadataBoundary"]
-f:"$Sreact.suspense"
-11:I[843,["219","static/chunks/app/global-error-974a25afad84534b.js"],"default"]
-:HL["/_next/static/css/93f4d2d915e1960d.css","style"]
+3:I[7979,["177","static/chunks/app/layout-24e2fc24f0f4591b.js"],"default"]
+4:I[128,[],""]
+5:I[6479,["39","static/chunks/app/error-d9f95d8d9a1d6aa7.js"],"default"]
+6:I[1014,[],""]
+7:I[9425,["345","static/chunks/app/not-found-b8454733e75f5762.js"],""]
+8:I[8926,["22","static/chunks/b19636e3-413576e6b17ba23b.js","340","static/chunks/340-a2c12350b7ffe541.js","974","static/chunks/app/page-78a128d560052a0e.js"],"default"]
+9:I[5965,[],"OutletBoundary"]
+b:I[2616,[],"AsyncMetadataOutlet"]
+d:I[5965,[],"ViewportBoundary"]
+f:I[5965,[],"MetadataBoundary"]
+10:"$Sreact.suspense"
+12:I[843,["219","static/chunks/app/global-error-251bd84b569fda22.js"],"default"]
+:HL["/_next/static/css/c7d1948d5392c059.css","style"]
 2:T6b8,
               (function() {
                 // Intercept unhandled extension errors (e.g. MetaMask injected script connection failures in iframe)
@@ -47,9 +48,9 @@ f:"$Sreact.suspense"
                   }, true);
                 }
               })();
-            0:{"P":null,"b":"_Q1G8YwxAY6Ju9ECJmWcp","p":"","c":["",""],"i":false,"f":[[["",{"children":["__PAGE__",{}]},"$undefined","$undefined",true],["",["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/css/93f4d2d915e1960d.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]],["$","html",null,{"lang":"fa","dir":"rtl","suppressHydrationWarning":true,"children":[["$","head",null,{"children":["$","script",null,{"dangerouslySetInnerHTML":{"__html":"$2"}}]}],["$","body",null,{"className":"antialiased min-h-screen selection:bg-slate-700 selection:text-white","suppressHydrationWarning":true,"children":["$","$L3",null,{"parallelRouterKey":"children","error":"$4","errorStyles":[],"errorScripts":[],"template":["$","$L5",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[["$","div",null,{"className":"min-h-screen flex flex-col items-center justify-center p-4 bg-slate-900 text-slate-100","children":[["$","h2",null,{"className":"text-2xl font-bold mb-2","children":"صفحه مورد نظر یافت نشد"}],["$","p",null,{"className":"text-sm text-slate-400 mb-4","children":"آدرس درخواست شده در سامانه وجود ندارد."}],["$","$L6",null,{"href":"/","className":"px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-all","children":"بازگشت به صفحه اصلی"}]]}],[]],"forbidden":"$undefined","unauthorized":"$undefined"}]}]]}]]}],{"children":["__PAGE__",["$","$1","c",{"children":[["$","main",null,{"className":"min-h-screen","children":["$","$L7",null,{}]}],null,["$","$L8",null,{"children":["$L9",["$","$La",null,{"promise":"$@b"}]]}]]}],{},null,false]},null,false],["$","$1","h",{"children":[null,[["$","$Lc",null,{"children":"$Ld"}],null],["$","$Le",null,{"children":["$","div",null,{"hidden":true,"children":["$","$f",null,{"fallback":null,"children":"$L10"}]}]}]]}],false]],"m":"$undefined","G":["$11",[]],"s":false,"S":true}
-d:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
-9:null
-12:I[4584,[],"IconMark"]
-b:{"metadata":[["$","title","0",{"children":"دیده بُن | سامانه رصد و مقایسه صرافی‌های ارز دیجیتال (didehbon.ir)"}],["$","meta","1",{"name":"description","content":"سامانه دیده بُن (didehbon.ir) - ابزار تحلیل، پایش و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال، جریان نقدینگی و اخبار"}],["$","meta","2",{"property":"og:title","content":"دیده بُن | سامانه رصد و مقایسه صرافی‌های ارز دیجیتال (didehbon.ir)"}],["$","meta","3",{"property":"og:description","content":"سامانه دیده بُن (didehbon.ir) - ابزار تحلیل، پایش و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال، جریان نقدینگی و اخبار"}],["$","meta","4",{"property":"og:image","content":"http://localhost:3000/didehbon-logo.svg"}],["$","meta","5",{"property":"og:type","content":"website"}],["$","meta","6",{"name":"twitter:card","content":"summary_large_image"}],["$","meta","7",{"name":"twitter:title","content":"دیده بُن | سامانه رصد و مقایسه صرافی‌های ارز دیجیتال (didehbon.ir)"}],["$","meta","8",{"name":"twitter:description","content":"سامانه دیده بُن (didehbon.ir) - ابزار تحلیل، پایش و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال، جریان نقدینگی و اخبار"}],["$","meta","9",{"name":"twitter:image","content":"http://localhost:3000/didehbon-logo.svg"}],["$","link","10",{"rel":"icon","href":"/favicon.svg"}],["$","link","11",{"rel":"apple-touch-icon","href":"/didehbon-logo.svg"}],["$","$L12","12",{}]],"error":null,"digest":"$undefined"}
-10:"$b:metadata"
+            0:{"P":null,"b":"7IHSK4irs4i2gUv6UlBvl","p":"","c":["",""],"i":false,"f":[[["",{"children":["__PAGE__",{}]},"$undefined","$undefined",true],["",["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/css/c7d1948d5392c059.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]],["$","html",null,{"lang":"fa","dir":"rtl","suppressHydrationWarning":true,"children":[["$","head",null,{"children":["$","script",null,{"dangerouslySetInnerHTML":{"__html":"$2"}}]}],["$","body",null,{"className":"antialiased min-h-screen selection:bg-slate-700 selection:text-white","suppressHydrationWarning":true,"children":[["$","$L3",null,{}],["$","$L4",null,{"parallelRouterKey":"children","error":"$5","errorStyles":[],"errorScripts":[],"template":["$","$L6",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[["$","div",null,{"className":"min-h-screen flex flex-col items-center justify-center p-4 bg-slate-900 text-slate-100","children":[["$","h2",null,{"className":"text-2xl font-bold mb-2","children":"صفحه مورد نظر یافت نشد"}],["$","p",null,{"className":"text-sm text-slate-400 mb-4","children":"آدرس درخواست شده در سامانه وجود ندارد."}],["$","$L7",null,{"href":"/","className":"px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-all","children":"بازگشت به صفحه اصلی"}]]}],[]],"forbidden":"$undefined","unauthorized":"$undefined"}]]}]]}]]}],{"children":["__PAGE__",["$","$1","c",{"children":[["$","main",null,{"className":"min-h-screen","children":["$","$L8",null,{}]}],null,["$","$L9",null,{"children":["$La",["$","$Lb",null,{"promise":"$@c"}]]}]]}],{},null,false]},null,false],["$","$1","h",{"children":[null,[["$","$Ld",null,{"children":"$Le"}],null],["$","$Lf",null,{"children":["$","div",null,{"hidden":true,"children":["$","$10",null,{"fallback":null,"children":"$L11"}]}]}]]}],false]],"m":"$undefined","G":["$12",[]],"s":false,"S":true}
+e:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
+a:null
+13:I[4584,[],"IconMark"]
+c:{"metadata":[["$","title","0",{"children":"دیده بُن | سامانه رصد و مقایسه صرافی‌های ارز دیجیتال (didehbon.ir)"}],["$","meta","1",{"name":"description","content":"سامانه دیده بُن (didehbon.ir) - ابزار تحلیل، پایش و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال، جریان نقدینگی و اخبار"}],["$","meta","2",{"property":"og:title","content":"دیده بُن | سامانه رصد و مقایسه صرافی‌های ارز دیجیتال (didehbon.ir)"}],["$","meta","3",{"property":"og:description","content":"سامانه دیده بُن (didehbon.ir) - ابزار تحلیل، پایش و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال، جریان نقدینگی و اخبار"}],["$","meta","4",{"property":"og:image","content":"http://localhost:3000/didehbon-logo.svg"}],["$","meta","5",{"property":"og:type","content":"website"}],["$","meta","6",{"name":"twitter:card","content":"summary_large_image"}],["$","meta","7",{"name":"twitter:title","content":"دیده بُن | سامانه رصد و مقایسه صرافی‌های ارز دیجیتال (didehbon.ir)"}],["$","meta","8",{"name":"twitter:description","content":"سامانه دیده بُن (didehbon.ir) - ابزار تحلیل، پایش و مقایسه زنده حجم معاملات صرافی‌های ارز دیجیتال، جریان نقدینگی و اخبار"}],["$","meta","9",{"name":"twitter:image","content":"http://localhost:3000/didehbon-logo.svg"}],["$","link","10",{"rel":"icon","href":"/favicon.svg"}],["$","link","11",{"rel":"apple-touch-icon","href":"/didehbon-logo.svg"}],["$","$L13","12",{}]],"error":null,"digest":"$undefined"}
+11:"$c:metadata"

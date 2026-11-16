@@ -84,8 +84,8 @@ export const translations = {
     behind: 'کمتر',
     ahead: 'بیشتر',
     // Top-Level Navigation
-    navVolumes: 'مقایسه حجم‌ها',
-    navFlow: 'جریان پول (Sankey Flow)',
+    navVolumes: 'مقایسه حجم صرافی',
+    navFlow: 'سیگنال دهی',
     navNews: 'اخبار مهم صرافی‌ها و بازار',
     navVolumesDesc: 'رصد زنده حجم معاملات صرافی‌های ایرانی و آمار رمزارزها',
     navFlowDesc: 'دیاگرام جریان ورود و خروج پول و قدرت خرید/فروش در والکس',
@@ -213,7 +213,7 @@ export const translations = {
     ahead: 'lead',
     // Top-Level Navigation
     navVolumes: 'Volume Comparison',
-    navFlow: 'Money Flow (Sankey)',
+    navFlow: 'Signals',
     navNews: 'Exchange & Crypto News',
     navVolumesDesc: 'Real-time 24h trading volumes across Iranian exchanges and coins',
     navFlowDesc: 'Real-time liquidity migration and buy/sell pressure Sankey diagram for Wallex',

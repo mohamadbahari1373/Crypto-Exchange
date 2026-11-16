@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import Image from 'next/image';
 import { Activity, AlertCircle, ArrowDownRight, ArrowUpRight, Bitcoin, Globe2, TrendingDown, TrendingUp, Waves } from 'lucide-react';
@@ -83,7 +83,7 @@ function StatCard({ title, value, detail, icon, loading, error, accent }: { titl
           ) : error ? (
             <div className="mt-3"><ErrorState message={error} /></div>
           ) : (
-            <><p className="mt-3 font-sans text-2xl font-bold tracking-tight text-white sm:text-[27px]" dir="ltr">{value}</p>{detail && <div className="mt-2 text-xs text-gray-400">{detail}</div>}</>
+            <><p className="mt-3 font-sans text-2xl font-bold tracking-tight text-white tabular-nums sm:text-[27px]" dir="ltr">{value}</p>{detail && <div className="mt-2 text-xs text-gray-400">{detail}</div>}</>
           )}
         </div>
         <span className={`rounded-xl border border-white/[0.07] bg-white/[0.04] p-2.5 ${accent}`}>{icon}</span>
@@ -112,7 +112,16 @@ function Sparkline({ values, positive, id }: { values: number[]; positive: boole
   );
 }
 
-function CoinRow({ coin, onSelect }: { coin: MarketCoin; onSelect: (coinId: string) => void; }) {
+interface CoinRowProps {
+  coin: MarketCoin;
+  onSelect: (coinId: string) => void;
+}
+
+function areSparklineValuesEqual(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+const CoinRow = memo(function CoinRow({ coin, onSelect }: CoinRowProps) {
   const positive = coin.priceChange24h !== null && coin.priceChange24h >= 0;
   return (
     <button type="button" onClick={() => onSelect(coin.id)} className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 rounded-xl border border-white/[0.055] bg-white/[0.015] p-3.5 text-right transition hover:border-cyan-300/20 hover:bg-white/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 sm:grid-cols-[minmax(0,1.15fr)_minmax(95px,0.8fr)_minmax(95px,0.75fr)_minmax(96px,0.65fr)] sm:gap-3">
@@ -124,7 +133,7 @@ function CoinRow({ coin, onSelect }: { coin: MarketCoin; onSelect: (coinId: stri
         </div>
       </div>
       <div className="text-left font-sans sm:text-right" dir="ltr">
-        <p className="font-sans text-sm font-semibold text-white">{formatUsdPrice(coin.currentPrice)}</p>
+        <p className="font-sans text-sm font-semibold text-white tabular-nums">{formatUsdPrice(coin.currentPrice)}</p>
         <p className="mt-1 font-sans text-[10px] text-gray-500" dir="ltr">{coin.marketCap === null ? 'ارزش بازار —' : `${formatUsdCompact(coin.marketCap)} ارزش بازار`}</p>
       </div>
       <div className="flex items-center justify-end gap-2 sm:justify-center">
@@ -136,9 +145,28 @@ function CoinRow({ coin, onSelect }: { coin: MarketCoin; onSelect: (coinId: stri
       </div>
     </button>
   );
+}, (previous, next) => {
+  const left = previous.coin;
+  const right = next.coin;
+  return previous.onSelect === next.onSelect
+    && left.id === right.id
+    && left.name === right.name
+    && left.symbol === right.symbol
+    && left.image === right.image
+    && left.currentPrice === right.currentPrice
+    && left.marketCap === right.marketCap
+    && left.marketCapRank === right.marketCapRank
+    && left.priceChange24h === right.priceChange24h
+    && areSparklineValuesEqual(left.sparkline, right.sparkline);
+});
+
+interface MovementCardProps {
+  coin: MarketCoin & { priceChange24h: number };
+  type: 'gainer' | 'loser';
+  onSelect: (coinId: string) => void;
 }
 
-function MovementCard({ coin, type, onSelect }: { coin: MarketCoin & { priceChange24h: number }; type: 'gainer' | 'loser'; onSelect: (coinId: string) => void; }) {
+const MovementCard = memo(function MovementCard({ coin, type, onSelect }: MovementCardProps) {
   const isGainer = type === 'gainer';
   return (
     <button type="button" onClick={() => onSelect(coin.id)} className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border p-3 text-right transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${isGainer ? 'border-emerald-400/15 bg-emerald-400/[0.035]' : 'border-rose-400/15 bg-rose-400/[0.035]'}`}>
@@ -152,7 +180,13 @@ function MovementCard({ coin, type, onSelect }: { coin: MarketCoin & { priceChan
       <p className={`shrink-0 font-sans text-sm font-bold tabular-nums ${isGainer ? 'text-emerald-300' : 'text-rose-300'}`} dir="ltr">{isGainer ? '+' : ''}{formatNumber(coin.priceChange24h)}%</p>
     </button>
   );
-}
+}, (previous, next) => previous.type === next.type
+  && previous.onSelect === next.onSelect
+  && previous.coin.id === next.coin.id
+  && previous.coin.name === next.coin.name
+  && previous.coin.symbol === next.coin.symbol
+  && previous.coin.image === next.coin.image
+  && previous.coin.priceChange24h === next.coin.priceChange24h);
 
 export default function MarketPulseDashboard() {
   const [fearGreed, setFearGreed] = useState<LoadState<FearGreedPoint[]>>(initialState);
@@ -165,45 +199,65 @@ export default function MarketPulseDashboard() {
 
   const refreshData = useCallback(async (signal: AbortSignal) => {
     const loadFearGreed = async () => {
-      setFearGreed({ status: 'loading', data: null, error: null });
       try {
         const response = await fetchJson<any>('https://api.alternative.me/fng/?limit=30', signal);
         const points = response.data.map((entry: any) => ({
           value: Number(entry.value), classification: entry.value_classification, timestamp: Number(entry.timestamp), date: formatChartDate(Number(entry.timestamp))
         })).sort((a: any, b: any) => a.timestamp - b.timestamp);
         if (!signal.aborted) setFearGreed({ status: 'success', data: points, error: null });
-      } catch (error) { if (!signal.aborted) setFearGreed({ status: 'error', data: null, error: getErrorMessage(error) }); }
+      } catch (error) {
+        if (!signal.aborted) {
+          setFearGreed((current) => current.data === null
+            ? { status: 'error', data: null, error: getErrorMessage(error) }
+            : current);
+        }
+      }
     };
 
     const loadGlobalMarket = async () => {
-      setGlobalMarket({ status: 'loading', data: null, error: null });
       try {
         const response = await fetchJson<any>('https://api.coingecko.com/api/v3/global', signal);
         const data = response.data;
         if (!signal.aborted) setGlobalMarket({ status: 'success', data: { marketCapUsd: data.total_market_cap.usd, volumeUsd: data.total_volume.usd, bitcoinDominance: data.market_cap_percentage.btc, marketCapChange24h: data.market_cap_change_percentage_24h_usd }, error: null });
-      } catch (error) { if (!signal.aborted) setGlobalMarket({ status: 'error', data: null, error: getErrorMessage(error) }); }
+      } catch (error) {
+        if (!signal.aborted) {
+          setGlobalMarket((current) => current.data === null
+            ? { status: 'error', data: null, error: getErrorMessage(error) }
+            : current);
+        }
+      }
     };
 
     const loadMarketCoins = async () => {
-      setMarketCoins({ status: 'loading', data: null, error: null });
       try {
         const response = await fetchJson<any[]>('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=true&price_change_percentage=24h', signal);
         const coins = response.filter(coin => !STABLECOIN_SYMBOLS.has(coin.symbol?.trim().toUpperCase())).map(coin => ({
           id: coin.id, name: coin.name, symbol: coin.symbol, image: coin.image, currentPrice: coin.current_price, marketCap: coin.market_cap, marketCapRank: coin.market_cap_rank, priceChange24h: coin.price_change_percentage_24h, sparkline: coin.sparkline_in_7d?.price || []
         }));
         if (!signal.aborted) setMarketCoins({ status: 'success', data: coins, error: null });
-      } catch (error) { if (!signal.aborted) setMarketCoins({ status: 'error', data: null, error: getErrorMessage(error) }); }
+      } catch (error) {
+        if (!signal.aborted) {
+          setMarketCoins((current) => current.data === null
+            ? { status: 'error', data: null, error: getErrorMessage(error) }
+            : current);
+        }
+      }
     };
 
     const loadTrendingCoins = async () => {
-      setTrendingCoins({ status: 'loading', data: null, error: null });
       try {
         const response = await fetchJson<any>('https://api.coingecko.com/api/v3/search/trending', signal);
         const coins = response.coins.filter((c: any) => !STABLECOIN_SYMBOLS.has(c.item.symbol.trim().toUpperCase())).slice(0, 5).map((c: any) => ({
           id: c.item.id, name: c.item.name, symbol: c.item.symbol, thumb: c.item.thumb, marketCapRank: c.item.market_cap_rank
         }));
         if (!signal.aborted) setTrendingCoins({ status: 'success', data: coins, error: null });
-      } catch (error) { if (!signal.aborted) setTrendingCoins({ status: 'error', data: null, error: getErrorMessage(error) }); }
+      } catch (error) {
+        if (!signal.aborted) {
+          setTrendingCoins((current) => current.data === null
+            ? { status: 'error', data: null, error: getErrorMessage(error) }
+            : current);
+        }
+      }
     };
 
     await Promise.all([loadFearGreed(), loadGlobalMarket(), loadMarketCoins(), loadTrendingCoins()]);
@@ -234,6 +288,10 @@ export default function MarketPulseDashboard() {
   
   // تغییر به 20 ارز برای لیست پایینی بجای 10 ارز
   const topCoins = coinList.slice(0, 20);
+  const selectedMarketCoin = coinList.find((coin) => coin.id === selectedCoinId);
+  const selectedTrendingCoin = trendingCoins.data?.find((coin) => coin.id === selectedCoinId);
+  const selectedCoinName = selectedMarketCoin?.name || selectedTrendingCoin?.name || selectedCoinId || '';
+  const selectedCoinSymbol = selectedMarketCoin?.symbol || selectedTrendingCoin?.symbol || '';
 
   return (
     <main dir="rtl" className="min-h-screen bg-[#090b11] px-4 py-7 text-white sm:px-6 lg:px-8">
@@ -324,7 +382,14 @@ export default function MarketPulseDashboard() {
         </Panel>
       </div>
       
-      {selectedCoinId && <LiveNewsCandleChart coinId={selectedCoinId} onClose={closeChart} />}
+      {selectedCoinId && (
+        <LiveNewsCandleChart
+          coinId={selectedCoinId}
+          coinName={selectedCoinName}
+          coinSymbol={selectedCoinSymbol}
+          onClose={closeChart}
+        />
+      )}
     </main>
   );
 }

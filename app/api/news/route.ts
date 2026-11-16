@@ -258,8 +258,10 @@ async function fetchMihanSignalArticles(): Promise<NewsArticle[]> {
         if (Array.isArray(posts)) {
           for (const p of posts) {
             const title = cleanHtmlText(p.title?.rendered || '');
-            const rawExcerpt = p.excerpt?.rendered || p.content?.rendered || '';
+            const rawContent = p.content?.rendered || '';
+            const rawExcerpt = p.excerpt?.rendered || rawContent;
             const summary = cleanHtmlText(rawExcerpt).slice(0, 240) + '...';
+            const fullContent = cleanHtmlText(rawContent || rawExcerpt);
             const url = p.link || `https://mihansignal.com/?p=${p.id}`;
             const publishedAt = p.date_gmt ? `${p.date_gmt}Z` : p.date || new Date().toISOString();
 
@@ -290,6 +292,7 @@ async function fetchMihanSignalArticles(): Promise<NewsArticle[]> {
               id: `mihan-${p.id}`,
               title,
               summary,
+              fullContent,
               url,
               source: 'mihansignal',
               sourceNameFa: 'میهن سیگنال',
@@ -346,8 +349,10 @@ async function fetchMihanBlockchainArticles(): Promise<NewsArticle[]> {
           const title = cleanHtmlText(p.title?.rendered || '');
           if (!title) continue;
 
-          const rawExcerpt = p.excerpt?.rendered || p.content?.rendered || '';
+          const rawContent = p.content?.rendered || '';
+          const rawExcerpt = p.excerpt?.rendered || rawContent;
           const summary = cleanHtmlText(rawExcerpt).slice(0, 240) + '...';
+          const fullContent = cleanHtmlText(rawContent || rawExcerpt);
           const url = p.link || `https://mihanblockchain.com/?p=${p.id}`;
           const publishedAt = p.date_gmt ? `${p.date_gmt}Z` : p.date || new Date().toISOString();
 
@@ -386,6 +391,7 @@ async function fetchMihanBlockchainArticles(): Promise<NewsArticle[]> {
             id: `mihanbc-${p.id}`,
             title,
             summary,
+            fullContent,
             url,
             source: 'mihanblockchain',
             sourceNameFa: 'میهن بلاکچین',
@@ -476,7 +482,9 @@ function parseRssFeedItems(xmlText: string, source: 'arzdigital' | 'mihansignal'
 
       // Image
       const contentEncodedMatch = itemContent.match(/<content:encoded>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/content:encoded>/i);
-      const fullHtml = (contentEncodedMatch ? contentEncodedMatch[1] || contentEncodedMatch[2] || '' : '') + ' ' + rawDesc;
+      const rawContent = contentEncodedMatch ? contentEncodedMatch[1] || contentEncodedMatch[2] || '' : '';
+      const fullContent = cleanHtmlText(rawContent || rawDesc);
+      const fullHtml = rawContent + ' ' + rawDesc;
       const imageUrl = extractImageUrl(fullHtml);
 
       // Category detection
@@ -507,6 +515,7 @@ function parseRssFeedItems(xmlText: string, source: 'arzdigital' | 'mihansignal'
         id,
         title,
         summary,
+        fullContent,
         url,
         source,
         sourceNameFa,
@@ -617,6 +626,7 @@ function parseCryptoPotatoRss(xmlText: string): NewsArticle[] {
       const rawContent = contentEncodedMatch ? contentEncodedMatch[1] || contentEncodedMatch[2] || '' : '';
       const summaryRaw = cleanHtmlText(rawDesc || rawContent);
       const summary = summaryRaw ? summaryRaw.slice(0, 240) + '...' : '';
+      const fullContent = cleanHtmlText(rawContent || rawDesc);
 
       // Image
       const imageUrl = extractImageUrl(itemContent);
@@ -638,6 +648,7 @@ function parseCryptoPotatoRss(xmlText: string): NewsArticle[] {
         id,
         title,
         summary,
+        fullContent,
         url,
         source: 'cryptopotato',
         sourceNameFa: 'کریپتو پوتیتو (CryptoPotato)',
@@ -712,6 +723,10 @@ function parseCoinDeskRss(xmlText: string): NewsArticle[] {
       // Extract Description
       const descMatch = itemContent.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/i);
       const summary = descMatch ? cleanHtmlText(descMatch[1]) : '';
+      const contentEncodedMatch = itemContent.match(/<content:encoded>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/content:encoded>/i);
+      const fullContent = contentEncodedMatch
+        ? cleanHtmlText(contentEncodedMatch[1])
+        : summary;
 
       // Extract pubDate
       const dateMatch = itemContent.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
@@ -762,6 +777,7 @@ function parseCoinDeskRss(xmlText: string): NewsArticle[] {
         id,
         title,
         summary: summary.slice(0, 300),
+        fullContent,
         url,
         source: 'coindesk',
         sourceNameFa: 'کوین‌دسک (CoinDesk)',

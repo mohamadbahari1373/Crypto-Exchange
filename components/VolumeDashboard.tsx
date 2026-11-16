@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useTransition } from 'react';
+import React, { useState, useEffect, useMemo, useTransition, useRef } from 'react';
 import {
   RefreshCw,
   Sun,
@@ -22,8 +22,10 @@ import {
   ChevronDown,
   ChevronUp,
   ArrowRightLeft,
+  LayoutGrid,
 } from 'lucide-react';
 import NewsFeed from '@/components/NewsFeed';
+import MarketClockCards from '@/components/MarketClockCards';
 import MoneyFlowSankey from '@/components/MoneyFlowSankey';
 import MarketPulseDashboard from '@/components/MarketPulseDashboard';
 import DidehbonLogo, { DidehbonLogoIcon } from '@/components/DidehbonLogo';
@@ -47,6 +49,8 @@ import {
 } from '@/lib/formatters';
 import { translations } from '@/lib/translations';
 
+const QUICK_COIN_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE'];
+
 export default function VolumeDashboard() {
   const [data, setData] = useState<VolumeApiResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -61,7 +65,14 @@ export default function VolumeDashboard() {
   const [activeTab, setActiveTab] = useState<'table' | 'coins'>('coins');
   const [selectedCoinSymbol, setSelectedCoinSymbol] = useState<string>('ALL');
   const [coinSearchQuery, setCoinSearchQuery] = useState<string>('');
+  const [coinPickerOpen, setCoinPickerOpen] = useState(false);
+  const [allCoinsGridOpen, setAllCoinsGridOpen] = useState(false);
   const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
+  const coinPickerRootRef = useRef<HTMLDivElement>(null);
+  const coinPickerPanelRef = useRef<HTMLDivElement>(null);
+  const coinSearchInputRef = useRef<HTMLInputElement>(null);
+  const allCoinsPanelRef = useRef<HTMLDivElement>(null);
+  const muuriGridRef = useRef<HTMLDivElement>(null);
 
   const t = translations[lang];
   const isRtl = lang === 'fa';
@@ -159,15 +170,252 @@ export default function VolumeDashboard() {
         c.nameEn.toLowerCase().includes(q)
     );
   }, [data, coinSearchQuery]);
+  const allCoins = useMemo(() => data?.coins ?? [], [data]);
 
   // Selected coin details
   const activeCoin = useMemo(() => {
     const coinList = data?.coins;
     if (!coinList || selectedCoinSymbol === 'ALL') return null;
-    return coinList.find((c) => c.symbol === selectedCoinSymbol) || null;
+    return coinList.find((c) => c.symbol.toUpperCase() === selectedCoinSymbol.toUpperCase()) || null;
   }, [data, selectedCoinSymbol]);
 
+  useEffect(() => {
+    if (mainSection !== 'volumes' || activeTab !== 'coins') {
+      setCoinPickerOpen(false);
+      setAllCoinsGridOpen(false);
+    }
+  }, [activeTab, mainSection]);
+
+  useEffect(() => {
+    if (!coinPickerOpen) return;
+    coinSearchInputRef.current?.focus();
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !coinPickerRootRef.current?.contains(event.target)) {
+        setCoinPickerOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCoinPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [coinPickerOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+    void import('gsap')
+      .then(({ gsap }) => {
+        const panel = coinPickerPanelRef.current;
+        if (cancelled || !panel) return;
+        if (coinPickerOpen) {
+          gsap.fromTo(
+            panel,
+            { autoAlpha: 0, height: 0, y: -8 },
+            { autoAlpha: 1, height: 'auto', y: 0, duration: 0.22, ease: 'power2.out', overwrite: 'auto' },
+          );
+        } else {
+          gsap.to(panel, { autoAlpha: 0, height: 0, y: -8, duration: 0.16, ease: 'power2.in', overwrite: 'auto' });
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to animate the coin picker:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [coinPickerOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+    void import('gsap')
+      .then(({ gsap }) => {
+        const panel = allCoinsPanelRef.current;
+        if (cancelled || !panel) return;
+        if (allCoinsGridOpen) {
+          gsap.fromTo(
+            panel,
+            { autoAlpha: 0, height: 0, y: -8 },
+            { autoAlpha: 1, height: 'auto', y: 0, duration: 0.28, ease: 'power2.out', overwrite: 'auto' },
+          );
+        } else {
+          gsap.to(panel, { autoAlpha: 0, height: 0, y: -8, duration: 0.18, ease: 'power2.in', overwrite: 'auto' });
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to animate the coin grid panel:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [allCoinsGridOpen]);
+
+  useEffect(() => {
+    if (!allCoinsGridOpen || typeof window === 'undefined') return;
+    const container = muuriGridRef.current;
+    if (!container) return;
+
+    let cancelled = false;
+    let layoutFrame = 0;
+    let destroyGrid: (() => void) | undefined;
+    void import('muuri')
+      .then(({ default: Muuri }) => {
+        if (cancelled || !container.isConnected) return;
+        const grid = new Muuri(container, {
+          dragEnabled: true,
+          dragSort: true,
+          layoutDuration: 300,
+          layoutEasing: 'ease',
+          layoutOnResize: 150,
+        });
+        destroyGrid = () => grid.destroy();
+        layoutFrame = window.requestAnimationFrame(() => {
+          grid.refreshItems().layout();
+        });
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to initialize the coin grid:', error);
+      });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(layoutFrame);
+      destroyGrid?.();
+    };
+  }, [allCoinsGridOpen, allCoins]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+    void import('gsap')
+      .then(({ gsap }) => {
+        const section = document.querySelector<HTMLElement>(
+          activeTab === 'coins' ? '#section-coin-breakdown' : '#section-table',
+        );
+        if (cancelled || !section) return;
+        gsap.fromTo(
+          section,
+          { autoAlpha: 0, y: 10 },
+          { autoAlpha: 1, y: 0, duration: 0.3, ease: 'power2.out', overwrite: 'auto' },
+        );
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to animate the active dashboard tab:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, mainSection]);
+
+  useEffect(() => {
+    if (!data || mainSection !== 'volumes' || typeof window === 'undefined') return;
+    let cancelled = false;
+    void import('gsap')
+      .then(({ gsap }) => {
+        const cards = document.querySelectorAll<HTMLElement>('[data-stat-card]');
+        if (cancelled || cards.length === 0) return;
+        gsap.fromTo(
+          cards,
+          { autoAlpha: 0, y: 12 },
+          { autoAlpha: 1, y: 0, duration: 0.42, stagger: 0.08, ease: 'power2.out', overwrite: 'auto' },
+        );
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to animate the statistics cards:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data, mainSection]);
+
   const isDark = theme === 'dark';
+  const primaryNavigation = (
+    <nav
+      id="tool-primary-switcher"
+      dir={isRtl ? 'rtl' : 'ltr'}
+      className={`flex h-[52px] w-max items-center gap-0.5 rounded-xl border p-1 text-xs font-semibold shadow-xs ${
+        isDark ? 'bg-slate-900/90 border-slate-700/80' : 'bg-slate-100 border-slate-300/80'
+      }`}
+    >
+      <button
+        id="btn-nav-marketpulse"
+        onClick={() => setMainSection('marketpulse')}
+        className={`order-4 flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 transition-all ${
+          mainSection === 'marketpulse'
+            ? isDark
+              ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
+              : 'bg-white text-blue-700 shadow-xs'
+            : isDark
+            ? 'text-slate-400 hover:text-slate-200'
+            : 'text-slate-600 hover:text-slate-900'
+        }`}
+        aria-pressed={mainSection === 'marketpulse'}
+      >
+        <span>🔥 نبض بازار جهانی</span>
+      </button>
+
+      <button
+        id="btn-nav-volumes"
+        onClick={() => setMainSection('volumes')}
+        className={`order-3 flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 transition-all ${
+          mainSection === 'volumes'
+            ? isDark
+              ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
+              : 'bg-white text-blue-700 shadow-xs'
+            : isDark
+            ? 'text-slate-400 hover:text-slate-200'
+            : 'text-slate-600 hover:text-slate-900'
+        }`}
+        aria-pressed={mainSection === 'volumes'}
+      >
+        <BarChart3 className="h-3.5 w-3.5" />
+        <span>{t.navVolumes}</span>
+      </button>
+
+      <button
+        id="btn-nav-flow"
+        onClick={() => setMainSection('flow')}
+        className={`order-2 relative flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 transition-all ${
+          mainSection === 'flow'
+            ? isDark
+              ? 'bg-gradient-to-r from-amber-500 to-emerald-600 font-bold text-slate-950 shadow-sm shadow-amber-900/40'
+              : 'bg-amber-500 font-bold text-slate-950 shadow-xs'
+            : isDark
+            ? 'text-amber-400/90 hover:text-amber-300'
+            : 'text-amber-700 hover:text-amber-900'
+        }`}
+        aria-pressed={mainSection === 'flow'}
+      >
+        <ArrowRightLeft className="h-3.5 w-3.5" />
+        <span>{t.navFlow}</span>
+        <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+      </button>
+
+      <button
+        id="btn-nav-news"
+        onClick={() => setMainSection('news')}
+        className={`order-1 relative flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 transition-all ${
+          mainSection === 'news'
+            ? isDark
+              ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
+              : 'bg-white text-blue-700 shadow-xs'
+            : isDark
+            ? 'text-slate-400 hover:text-slate-200'
+            : 'text-slate-600 hover:text-slate-900'
+        }`}
+        aria-pressed={mainSection === 'news'}
+      >
+        <Newspaper className="h-3.5 w-3.5" />
+        <span>{t.navNews}</span>
+        <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+      </button>
+    </nav>
+  );
 
   return (
     <div
@@ -182,14 +430,15 @@ export default function VolumeDashboard() {
         {/* TOP BAR / NAVIGATION - Less is More */}
         <header
           id="app-header"
-          className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl border ${
+          className={`flex flex-col items-start gap-3 rounded-xl border p-3 sm:p-4 2xl:flex-nowrap 2xl:items-center 2xl:justify-between ${
+            isRtl ? '2xl:flex-row' : '2xl:flex-row-reverse'
+          } ${
             isDark
               ? 'bg-[#0F172A] border-slate-800/80 shadow-lg shadow-black/20'
               : 'bg-white border-slate-200 shadow-sm'
           }`}
         >
-          {/* Official Didehbon Logo & Brand Title */}
-          <div className="flex items-center gap-3">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-3 2xl:w-auto 2xl:flex-nowrap">
             <DidehbonLogo
               size="md"
               variant="full"
@@ -197,96 +446,22 @@ export default function VolumeDashboard() {
               isDark={isDark}
               showDomain={true}
             />
+            <div className="max-w-full overflow-x-auto no-scrollbar">
+              {primaryNavigation}
+            </div>
           </div>
 
-          {/* Minimalist Controls & Tool Options */}
-          <div className="flex items-center gap-2.5 self-stretch sm:self-auto justify-end flex-wrap">
-            {/* Primary Tool Switcher (Volume Comparison vs Exchange & Crypto News) */}
-            <div
-              id="tool-primary-switcher"
-              className={`flex items-center p-1 rounded-xl border text-xs font-semibold shadow-xs ${
-                isDark ? 'bg-slate-900/90 border-slate-700/80' : 'bg-slate-100 border-slate-300/80'
-              }`}
-            >
-              <button
-                id="btn-nav-news"
-                onClick={() => setMainSection('news')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all relative ${
-                  mainSection === 'news'
-                    ? isDark
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
-                      : 'bg-white text-blue-700 shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Newspaper className="w-3.5 h-3.5" />
-                <span>{t.navNews}</span>
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              </button>
-
-              <button
-                id="btn-nav-flow"
-                onClick={() => setMainSection('flow')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all relative ${
-                  mainSection === 'flow'
-                    ? isDark
-                      ? 'bg-gradient-to-r from-amber-500 to-emerald-600 text-slate-950 font-bold shadow-sm shadow-amber-900/40'
-                      : 'bg-amber-500 text-slate-950 font-bold shadow-xs'
-                    : isDark
-                    ? 'text-amber-400/90 hover:text-amber-300'
-                    : 'text-amber-700 hover:text-amber-900'
-                }`}
-              >
-                <ArrowRightLeft className="w-3.5 h-3.5" />
-                <span>{t.navFlow}</span>
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-              </button>
-
-              <button
-                id="btn-nav-volumes"
-                onClick={() => setMainSection('volumes')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  mainSection === 'volumes'
-                    ? isDark
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
-                      : 'bg-white text-blue-700 shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <BarChart3 className="w-3.5 h-3.5" />
-                <span>{t.navVolumes}</span>
-              </button>
-
-              <button
-                id="btn-nav-marketpulse"
-                onClick={() => setMainSection('marketpulse')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  mainSection === 'marketpulse'
-                    ? isDark
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/40'
-                      : 'bg-white text-blue-700 shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                aria-pressed={mainSection === 'marketpulse'}
-              >
-                <span>🔥 نبض بازار</span>
-              </button>
-
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-2.5 2xl:w-auto 2xl:flex-nowrap 2xl:justify-end">
+            <div className="max-w-full overflow-x-auto no-scrollbar">
+              <MarketClockCards lang={lang} />
             </div>
 
-            <div className={`h-5 w-px ${isDark ? 'bg-slate-800' : 'bg-slate-300'}`} />
+            <div className={`h-5 w-px shrink-0 ${isDark ? 'bg-slate-800' : 'bg-slate-300'}`} />
 
-            {/* Language Switcher */}
             <button
               id="btn-lang-toggle"
               onClick={() => setLang(lang === 'fa' ? 'en' : 'fa')}
-              className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+              className={`h-[52px] shrink-0 rounded-lg border px-2.5 text-xs font-medium transition-all ${
                 isDark
                   ? 'bg-slate-900/90 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
                   : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-white'
@@ -296,11 +471,10 @@ export default function VolumeDashboard() {
               {lang === 'fa' ? 'EN' : 'فا'}
             </button>
 
-            {/* Theme Switcher */}
             <button
               id="btn-theme-toggle"
               onClick={() => setTheme(isDark ? 'light' : 'dark')}
-              className={`p-1.5 rounded-lg border transition-all ${
+              className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-lg border transition-all ${
                 isDark
                   ? 'bg-slate-900/90 border-slate-800 text-amber-300 hover:bg-slate-800'
                   : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-white'
@@ -310,7 +484,6 @@ export default function VolumeDashboard() {
             >
               {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
-
           </div>
         </header>
 
@@ -358,10 +531,11 @@ export default function VolumeDashboard() {
         ) : (
           <>
         {/* 4 CORE KPI METRICS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div id="volume-kpis" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Card 1: Total Market Volume */}
           <div
             id="metric-total-market"
+            data-stat-card
             className={`p-4 rounded-xl border transition-all ${
               isDark
                 ? 'bg-[#0F172A] border-slate-800/80 shadow-lg shadow-black/20'
@@ -400,6 +574,7 @@ export default function VolumeDashboard() {
           {/* Card 2: My Exchange Selector & Volume */}
           <div
             id="metric-my-exchange"
+            data-stat-card
             className={`p-4 rounded-xl border transition-all ${
               isDark
                 ? 'bg-[#0F172A] border-blue-900/40 shadow-lg shadow-blue-950/20'
@@ -460,6 +635,7 @@ export default function VolumeDashboard() {
           {/* Card 3: Gap vs Leader */}
           <div
             id="metric-leader-gap"
+            data-stat-card
             className={`p-4 rounded-xl border transition-all ${
               isDark
                 ? 'bg-[#0F172A] border-slate-800/80 shadow-lg shadow-black/20'
@@ -505,6 +681,7 @@ export default function VolumeDashboard() {
           {/* Card 4: Active Ecosystem Scope */}
           <div
             id="metric-scope"
+            data-stat-card
             className={`p-4 rounded-xl border transition-all ${
               isDark
                 ? 'bg-[#0F172A] border-slate-800/80 shadow-lg shadow-black/20'
@@ -885,7 +1062,7 @@ export default function VolumeDashboard() {
         {/* TAB: COIN-SPECIFIC VOLUME ANALYSIS & RECHARTS */}
         {activeTab === 'coins' && (
           <div id="section-coin-breakdown" className="flex flex-col gap-5">
-            {/* Header with Search and Coin Filter Pills */}
+            {/* Coin picker, quick filters, and animated full-market grid */}
             <div
               className={`p-4 rounded-xl border ${
                 isDark
@@ -893,7 +1070,7 @@ export default function VolumeDashboard() {
                   : 'bg-white border-slate-200 shadow-sm'
               }`}
             >
-              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-3 border-b border-slate-800/40">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800/40">
                 <div>
                   <div className="flex items-center gap-2">
                     <Coins className="w-5 h-5 text-amber-400" />
@@ -909,80 +1086,259 @@ export default function VolumeDashboard() {
                     {t.coinBreakdownSubtitle}
                   </p>
                 </div>
-
-                {/* Coin Search Input */}
-                <div className="w-full md:w-72 relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    id="coin-search-input"
-                    type="text"
-                    value={coinSearchQuery}
-                    onChange={(e) => setCoinSearchQuery(e.target.value)}
-                    placeholder={t.coinSearchPlaceholder}
-                    className={`w-full ps-9 pe-3 py-1.5 text-xs rounded-lg border outline-none transition-all ${
-                      isDark
-                        ? 'bg-slate-900 border-slate-700 text-slate-100 placeholder-slate-500 focus:border-blue-500'
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-blue-500'
-                    }`}
-                  />
-                  {coinSearchQuery && (
-                    <button
-                      onClick={() => setCoinSearchQuery('')}
-                      className="absolute end-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-200"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
+                <span className="text-[10px] text-slate-500">
+                  {lang === 'fa'
+                    ? `${toPersianDigits(data?.coins?.length ?? 0)} رمزارز در فهرست`
+                    : `${data?.coins?.length ?? 0} assets listed`}
+                </span>
               </div>
 
-              {/* Coin Quick-Select Pills */}
-              <div className="pt-3">
-                <div className="text-[11px] font-semibold text-slate-400 mb-2 flex items-center justify-between">
-                  <span>{t.filterSelectCoin}</span>
-                  <span className="text-[10px] text-slate-500">
-                    {lang === 'fa' ? `${filteredCoins.length} رمزارز فعال` : `${filteredCoins.length} active coins`}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-                  <button
-                    id="coin-pill-all"
-                    onClick={() => setSelectedCoinSymbol('ALL')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
-                      selectedCoinSymbol === 'ALL'
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : isDark
-                        ? 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
-                    }`}
-                  >
-                    <Layers className="w-3.5 h-3.5" />
-                    <span>{t.filterAllCoins}</span>
-                  </button>
-
-                  {filteredCoins.map((coin) => {
-                    const isSelected = selectedCoinSymbol === coin.symbol;
-                    return (
-                      <button
-                        key={coin.symbol}
-                        id={`coin-pill-${coin.symbol.toLowerCase()}`}
-                        onClick={() => setSelectedCoinSymbol(coin.symbol)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
-                          isSelected
-                            ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                            : isDark
-                            ? 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
-                        }`}
-                      >
-                        <span className="font-mono text-[11px]">{coin.symbol}</span>
-                        <span className="text-[11px] opacity-80">
-                          {lang === 'fa' ? coin.nameFa : coin.nameEn}
+              <div className="flex flex-col gap-4 pt-4">
+                <section className="flex flex-col gap-2">
+                  <label className="text-[11px] font-semibold text-slate-400">
+                    {t.filterSelectCoin}
+                  </label>
+                  <div ref={coinPickerRootRef} className="relative">
+                    <button
+                      id="coin-picker-trigger"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={coinPickerOpen}
+                      aria-controls="coin-picker-options"
+                      onClick={() => setCoinPickerOpen((open) => !open)}
+                      className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-3 text-start text-sm transition-colors ${
+                        isDark
+                          ? 'border-slate-700 bg-slate-900 text-slate-100 hover:border-blue-500/70'
+                          : 'border-slate-300 bg-slate-50 text-slate-900 hover:border-blue-500'
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Search className="h-4 w-4 shrink-0 text-blue-400" />
+                        <span className="truncate">
+                          {selectedCoinSymbol === 'ALL'
+                            ? t.filterAllCoins
+                            : `${selectedCoinSymbol} · ${activeCoin
+                              ? (lang === 'fa' ? activeCoin.nameFa : activeCoin.nameEn)
+                              : selectedCoinSymbol}`}
                         </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                      </span>
+                      <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${coinPickerOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    <div
+                      ref={coinPickerPanelRef}
+                      aria-hidden={!coinPickerOpen}
+                      className={`absolute inset-x-0 top-[calc(100%+0.5rem)] z-40 overflow-hidden rounded-xl border shadow-2xl ${
+                        coinPickerOpen ? 'pointer-events-auto' : 'pointer-events-none'
+                      } ${
+                        isDark
+                          ? 'border-slate-700 bg-slate-950 shadow-black/40'
+                          : 'border-slate-200 bg-white shadow-slate-900/15'
+                      }`}
+                      style={{ height: 0, opacity: 0, visibility: 'hidden' }}
+                    >
+                      <div className={`border-b p-3 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+                        <div className="relative">
+                          <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            ref={coinSearchInputRef}
+                            id="coin-search-input"
+                            type="search"
+                            role="searchbox"
+                            value={coinSearchQuery}
+                            onChange={(event) => setCoinSearchQuery(event.target.value)}
+                            placeholder={t.coinSearchPlaceholder}
+                            className={`w-full rounded-lg border py-2 ps-9 pe-3 text-xs outline-none ${
+                              isDark
+                                ? 'border-slate-700 bg-slate-900 text-slate-100 placeholder-slate-500 focus:border-blue-500'
+                                : 'border-slate-300 bg-slate-50 text-slate-900 placeholder-slate-400 focus:border-blue-500'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                      <div id="coin-picker-options" role="listbox" aria-label={t.filterSelectCoin} className="max-h-80 overflow-y-auto p-1.5">
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={selectedCoinSymbol === 'ALL'}
+                          onClick={() => {
+                            setSelectedCoinSymbol('ALL');
+                            setCoinSearchQuery('');
+                            setCoinPickerOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-start text-xs transition-colors ${
+                            selectedCoinSymbol === 'ALL'
+                              ? 'bg-blue-600/15 text-blue-300'
+                              : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2"><Layers className="h-4 w-4" />{t.filterAllCoins}</span>
+                          <span className="text-[10px] text-slate-500">{data?.coins?.length ?? 0}</span>
+                        </button>
+                        {filteredCoins.length > 0 ? filteredCoins.map((coin) => {
+                          const symbol = coin.symbol.toUpperCase();
+                          const isSelected = selectedCoinSymbol === symbol;
+                          return (
+                            <button
+                              key={coin.symbol}
+                              type="button"
+                              role="option"
+                              aria-selected={isSelected}
+                              onClick={() => {
+                                setSelectedCoinSymbol(symbol);
+                                setCoinSearchQuery('');
+                                setCoinPickerOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-start transition-colors ${
+                                isSelected
+                                  ? 'bg-amber-500/15 text-amber-300'
+                                  : isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-800 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="flex min-w-0 items-center gap-3">
+                                <span className="min-w-14 rounded-md bg-slate-800/80 px-2 py-1 text-center font-mono text-[11px] font-bold">{coin.symbol}</span>
+                                <span className="min-w-0">
+                                  <span className="block truncate text-xs font-medium">{lang === 'fa' ? coin.nameFa : coin.nameEn}</span>
+                                  {lang === 'fa' && <span className="block truncate text-[10px] text-slate-500">{coin.nameEn}</span>}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-[10px] font-semibold text-emerald-400">
+                                {formatPercent(coin.wallexSharePercent, lang)}
+                              </span>
+                            </button>
+                          );
+                        }) : (
+                          <p className="px-3 py-5 text-center text-xs text-slate-500">
+                            {lang === 'fa' ? 'رمزارزی با این نام پیدا نشد.' : 'No matching assets found.'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="flex flex-col gap-2">
+                  <span className="text-[11px] font-semibold text-slate-400">
+                    {lang === 'fa' ? 'دسترسی سریع' : 'Quick select'}
+                  </span>
+                  <div className="flex flex-wrap gap-2.5">
+                    <button
+                      id="coin-pill-all"
+                      type="button"
+                      aria-pressed={selectedCoinSymbol === 'ALL'}
+                      onClick={() => {
+                        setSelectedCoinSymbol('ALL');
+                        setCoinSearchQuery('');
+                        setCoinPickerOpen(false);
+                      }}
+                      className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                        selectedCoinSymbol === 'ALL'
+                          ? 'border-blue-500 bg-blue-600 text-white'
+                          : isDark ? 'border-slate-700 bg-slate-900 text-slate-300 hover:border-blue-500/60' : 'border-slate-200 bg-slate-100 text-slate-700 hover:border-blue-400'
+                      }`}
+                    >
+                      {t.filterAllCoins}
+                    </button>
+                    {QUICK_COIN_SYMBOLS.map((symbol) => {
+                      const coin = data?.coins?.find((item) => item.symbol.toUpperCase() === symbol);
+                      const isSelected = selectedCoinSymbol === symbol;
+                      return (
+                        <button
+                          key={symbol}
+                          id={`coin-pill-${symbol.toLowerCase()}`}
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => {
+                            setSelectedCoinSymbol(symbol);
+                            setCoinSearchQuery('');
+                            setCoinPickerOpen(false);
+                          }}
+                          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors ${
+                            isSelected
+                              ? 'border-amber-400 bg-amber-500 text-slate-950 font-bold'
+                              : isDark ? 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500' : 'border-slate-200 bg-slate-100 text-slate-700 hover:border-slate-400'
+                          }`}
+                        >
+                          <span className="font-mono font-bold">{symbol}</span>
+                          {coin && <span className="text-[11px] opacity-75">{lang === 'fa' ? coin.nameFa : coin.nameEn}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-400">
+                      {lang === 'fa' ? 'همه رمزارزها' : 'Full asset list'}
+                    </span>
+                    <button
+                      id="coin-grid-toggle"
+                      type="button"
+                      aria-expanded={allCoinsGridOpen}
+                      aria-controls="all-coins-grid-panel"
+                      onClick={() => {
+                        setCoinPickerOpen(false);
+                        setCoinSearchQuery('');
+                        setAllCoinsGridOpen((open) => !open);
+                      }}
+                      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                        isDark
+                          ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/20'
+                          : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                      }`}
+                    >
+                      <LayoutGrid className="h-4 w-4" />
+                      {lang === 'fa'
+                        ? `مشاهده همه ${toPersianDigits(data?.coins?.length ?? 0)} رمزارز`
+                        : `View all ${data?.coins?.length ?? 0} assets`}
+                      {allCoinsGridOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                  <div
+                    id="all-coins-grid-panel"
+                    ref={allCoinsPanelRef}
+                    aria-hidden={!allCoinsGridOpen}
+                    className={`overflow-hidden ${allCoinsGridOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
+                    style={{ height: 0, opacity: 0, visibility: 'hidden' }}
+                  >
+                    {allCoins.length > 0 ? (
+                      <div
+                        ref={muuriGridRef}
+                        className="relative min-h-16 w-full"
+                        aria-label={lang === 'fa' ? 'شبکه رمزارزها؛ برای مرتب‌سازی کارت‌ها را بکشید' : 'Asset grid; drag cards to rearrange'}
+                      >
+                        {allCoins.map((coin) => (
+                          <button
+                            key={coin.symbol}
+                            type="button"
+                            aria-pressed={selectedCoinSymbol === coin.symbol.toUpperCase()}
+                            onClick={() => setSelectedCoinSymbol(coin.symbol.toUpperCase())}
+                            className={`coin-grid-item absolute box-border w-1/2 p-1.5 text-start sm:w-1/3 lg:w-1/4 xl:w-1/6`}
+                          >
+                            <span className={`flex h-full min-h-20 flex-col justify-between rounded-xl border p-3 transition-colors ${
+                              selectedCoinSymbol === coin.symbol.toUpperCase()
+                                ? 'border-amber-400 bg-amber-500/10'
+                                : isDark ? 'border-slate-700 bg-slate-900 hover:border-indigo-400/60' : 'border-slate-200 bg-white hover:border-indigo-300'
+                            }`}>
+                              <span className="flex items-center justify-between gap-1">
+                                <span className="font-mono text-xs font-bold">{coin.symbol}</span>
+                                <span className="text-[10px] font-semibold text-emerald-400">{formatPercent(coin.wallexSharePercent, lang)}</span>
+                              </span>
+                              <span className={`mt-2 truncate text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                                {lang === 'fa' ? coin.nameFa : coin.nameEn}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="py-6 text-center text-xs text-slate-500">
+                        {lang === 'fa' ? 'برای نمایش شبکه، جستجو را پاک کنید یا عبارت دیگری وارد کنید.' : 'Clear or change the search to show assets.'}
+                      </p>
+                    )}
+                  </div>
+                </section>
               </div>
             </div>
 

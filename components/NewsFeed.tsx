@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Image from 'next/image';
+import { gsap } from 'gsap';
 import {
   Newspaper,
   Search,
   Filter,
-  RefreshCw,
   Building2,
   TrendingUp,
   Globe,
@@ -24,6 +24,7 @@ import {
 } from '@/lib/types';
 import { translations } from '@/lib/translations';
 import { toPersianDigits } from '@/lib/formatters';
+import { fetchNewsData, isNewsApiResponse } from '@/lib/newsClient';
 
 const NEWS_STORAGE_KEY = 'didehbon-news-feed-v1';
 type NewsOriginFilter = 'all' | 'iranian' | 'foreign';
@@ -60,29 +61,6 @@ function matchesNewsOrigin(article: NewsArticle, origin: Exclude<NewsOriginFilte
   const sources = origin === 'iranian' ? IRANIAN_NEWS_SOURCES : FOREIGN_NEWS_SOURCES;
   return [article.source, article.sourceNameFa, article.sourceNameEn]
     .some((source) => sources.has(normalizeNewsSource(source)));
-}
-
-function isNewsApiResponse(data: unknown): data is NewsApiResponse {
-  return typeof data === 'object' && data !== null
-    && 'success' in data && data.success === true
-    && 'articles' in data && Array.isArray(data.articles)
-    && 'lastUpdated' in data && typeof data.lastUpdated === 'string'
-    && 'total' in data && typeof data.total === 'number'
-    && 'sources' in data && typeof data.sources === 'object' && data.sources !== null;
-}
-
-async function fetchNewsData(): Promise<NewsApiResponse> {
-  let response = await fetch('/api/cache_news.json', { cache: 'no-store' });
-  if (response.status === 404) {
-    response = await fetch('/api/news.php', { cache: 'no-store' });
-  }
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-  const data: unknown = await response.json();
-  if (!isNewsApiResponse(data)) {
-    throw new Error('Invalid news response');
-  }
-  return data;
 }
 
 function readStoredNews(): NewsApiResponse | null {
@@ -133,6 +111,18 @@ function formatRelativeTime(publishedAt: string, lang: Language): string {
   }).format(Math.round(value), unit);
 }
 
+function getFullNewsText(article: NewsArticle): string {
+  return (
+    article.fullContent ||
+    article.content ||
+    article.body ||
+    article.description ||
+    article.originalSummary ||
+    article.summary ||
+    ''
+  ).trim();
+}
+
 async function translateToPersian(text: string): Promise<string> {
   const response = await fetch(
     `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=fa&dt=t&q=${encodeURIComponent(text)}`
@@ -156,6 +146,26 @@ async function translateToPersian(text: string): Promise<string> {
     throw new Error('Translation response was empty');
   }
   return translated;
+}
+
+async function translateLongTextToPersian(text: string): Promise<string> {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + 3500, text.length);
+    if (end < text.length) {
+      const lastSpace = text.lastIndexOf(' ', end);
+      if (lastSpace > start + 1500) end = lastSpace;
+    }
+    chunks.push(text.slice(start, end).trim());
+    start = end;
+  }
+
+  const translatedChunks: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk) translatedChunks.push(await translateToPersian(chunk));
+  }
+  return translatedChunks.join('\n\n');
 }
 
 interface NewsFeedProps {
@@ -229,166 +239,8 @@ function NewsCardImage({ src, alt, source, isDark }: NewsCardImageProps) {
   );
 }
 
-interface Live3DClockProps {
-  isDark: boolean;
-  lang: Language;
-}
-
-const Live3DClock = memo(function Live3DClock({ isDark, lang }: Live3DClockProps) {
-  const hrRef = useRef<HTMLSpanElement>(null);
-  const minRef = useRef<HTMLSpanElement>(null);
-  const secRef = useRef<HTMLSpanElement>(null);
-  const msRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    let animId: number;
-    let lastTime = 0;
-
-    const tick = (now: number) => {
-      // Throttled to ~32ms (30 FPS) for smooth visual milliseconds without CPU stress
-      if (now - lastTime >= 32) {
-        lastTime = now;
-        const d = new Date();
-        const hr = d.getHours().toString().padStart(2, '0');
-        const min = d.getMinutes().toString().padStart(2, '0');
-        const sec = d.getSeconds().toString().padStart(2, '0');
-        const ms = Math.floor(d.getMilliseconds() / 10).toString().padStart(2, '0');
-
-        if (hrRef.current && hrRef.current.textContent !== hr) hrRef.current.textContent = hr;
-        if (minRef.current && minRef.current.textContent !== min) minRef.current.textContent = min;
-        if (secRef.current && secRef.current.textContent !== sec) secRef.current.textContent = sec;
-        if (msRef.current && msRef.current.textContent !== ms) msRef.current.textContent = ms;
-      }
-      animId = requestAnimationFrame(tick);
-    };
-
-    animId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animId);
-  }, []);
-
-  return (
-    <div
-      dir="ltr"
-      className={`relative inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl font-mono select-none transition-all ${
-        isDark
-          ? 'bg-gradient-to-b from-slate-900 via-slate-950 to-black border border-slate-700/80 shadow-[inset_0_2px_4px_rgba(0,0,0,0.9),0_6px_16px_rgba(0,0,0,0.6)]'
-          : 'bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 border border-slate-300 shadow-[inset_0_2px_3px_rgba(255,255,255,0.8),0_4px_10px_rgba(0,0,0,0.12)]'
-      }`}
-      title={lang === 'fa' ? 'ساعت فوق دقیق زنده با صدم ثانیه' : 'High-precision real-time 3D clock'}
-    >
-      {/* Live Pulsing Dot */}
-      <span className="relative flex h-2 w-2 mr-1">
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-        <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500 shadow-[0_0_6px_rgba(6,182,212,0.8)]"></span>
-      </span>
-
-      {/* HOURS */}
-      <div className="flex flex-col items-center">
-        <div
-          className={`relative px-1.5 py-0.5 rounded-lg flex items-center justify-center min-w-[24px] border-t transition-all ${
-            isDark
-              ? 'bg-gradient-to-b from-slate-800 to-slate-900 border-slate-600 shadow-[0_3px_0_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.15)]'
-              : 'bg-gradient-to-b from-white to-slate-100 border-white shadow-[0_2px_0_rgba(0,0,0,0.15)]'
-          }`}
-        >
-          <span
-            ref={hrRef}
-            className={`text-xs font-black tracking-wider ${
-              isDark ? 'text-slate-100 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]' : 'text-slate-800'
-            }`}
-          >
-            --
-          </span>
-          <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/15 to-transparent rounded-t-lg pointer-events-none" />
-        </div>
-        <span className="text-[7.5px] font-bold text-slate-500 uppercase mt-0.5 tracking-tighter">
-          {lang === 'fa' ? 'ساعت' : 'HR'}
-        </span>
-      </div>
-
-      {/* COLON */}
-      <span className="text-xs font-black text-cyan-400/90 animate-pulse pb-2">:</span>
-
-      {/* MINUTES */}
-      <div className="flex flex-col items-center">
-        <div
-          className={`relative px-1.5 py-0.5 rounded-lg flex items-center justify-center min-w-[24px] border-t transition-all ${
-            isDark
-              ? 'bg-gradient-to-b from-slate-800 to-slate-900 border-slate-600 shadow-[0_3px_0_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.15)]'
-              : 'bg-gradient-to-b from-white to-slate-100 border-white shadow-[0_2px_0_rgba(0,0,0,0.15)]'
-          }`}
-        >
-          <span
-            ref={minRef}
-            className={`text-xs font-black tracking-wider ${
-              isDark ? 'text-slate-100 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]' : 'text-slate-800'
-            }`}
-          >
-            --
-          </span>
-          <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/15 to-transparent rounded-t-lg pointer-events-none" />
-        </div>
-        <span className="text-[7.5px] font-bold text-slate-500 uppercase mt-0.5 tracking-tighter">
-          {lang === 'fa' ? 'دقیقه' : 'MIN'}
-        </span>
-      </div>
-
-      {/* COLON */}
-      <span className="text-xs font-black text-cyan-400/90 animate-pulse pb-2">:</span>
-
-      {/* SECONDS (CYAN NEON GLOW) */}
-      <div className="flex flex-col items-center">
-        <div
-          className={`relative px-1.5 py-0.5 rounded-lg flex items-center justify-center min-w-[24px] border-t transition-all ${
-            isDark
-              ? 'bg-gradient-to-b from-cyan-950/60 to-slate-900 border-cyan-500/50 shadow-[0_3px_0_rgba(0,0,0,0.7),inset_0_1px_0_rgba(34,211,238,0.25)]'
-              : 'bg-gradient-to-b from-cyan-50 to-cyan-100 border-cyan-200 shadow-[0_2px_0_rgba(6,182,212,0.3)]'
-          }`}
-        >
-          <span
-            ref={secRef}
-            className="text-xs font-black tracking-wider text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.5)]"
-          >
-            --
-          </span>
-          <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/20 to-transparent rounded-t-lg pointer-events-none" />
-        </div>
-        <span className="text-[7.5px] font-bold text-cyan-500 uppercase mt-0.5 tracking-tighter">
-          {lang === 'fa' ? 'ثانیه' : 'SEC'}
-        </span>
-      </div>
-
-      {/* DOT */}
-      <span className="text-xs font-black text-amber-400/90 pb-2">.</span>
-
-      {/* MILLISECONDS (AMBER/GOLD GLOW) */}
-      <div className="flex flex-col items-center">
-        <div
-          className={`relative px-1.5 py-0.5 rounded-lg flex items-center justify-center min-w-[26px] border-t transition-all ${
-            isDark
-              ? 'bg-gradient-to-b from-amber-950/60 to-slate-900 border-amber-500/50 shadow-[0_3px_0_rgba(0,0,0,0.7),inset_0_1px_0_rgba(251,191,36,0.25)]'
-              : 'bg-gradient-to-b from-amber-50 to-amber-100 border-amber-200 shadow-[0_2px_0_rgba(245,158,11,0.3)]'
-          }`}
-        >
-          <span
-            ref={msRef}
-            className="text-xs font-black tracking-wider text-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.6)]"
-          >
-            --
-          </span>
-          <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/20 to-transparent rounded-t-lg pointer-events-none" />
-        </div>
-        <span className="text-[7.5px] font-bold text-amber-500 uppercase mt-0.5 tracking-tighter">
-          {lang === 'fa' ? 'میلی‌ثانیه' : 'MS'}
-        </span>
-      </div>
-    </div>
-  );
-});
-
 export default function NewsFeed({ lang, theme }: NewsFeedProps) {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
-  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<NewsCategoryFilter>('all');
@@ -400,61 +252,133 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
   >({});
   const [translatingByArticle, setTranslatingByArticle] = useState<Record<string, boolean>>({});
   const [translationErrors, setTranslationErrors] = useState<Record<string, string>>({});
+  const [selectedNews, setSelectedNews] = useState<NewsArticle | null>(null);
+  const [showFullPersian, setShowFullPersian] = useState(false);
+  const [fullPersianTranslations, setFullPersianTranslations] = useState<
+    Record<string, { title: string; content: string }>
+  >({});
+  const [fullTranslationLoading, setFullTranslationLoading] = useState(false);
+  const [fullTranslationError, setFullTranslationError] = useState<string | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const refreshControllerRef = useRef<AbortController | null>(null);
+  const modalBackdropRef = useRef<HTMLDivElement>(null);
+  const modalPanelRef = useRef<HTMLDivElement>(null);
+  const modalClosingRef = useRef(false);
+  const modalScrollPositionRef = useRef(0);
 
   const t = translations[lang];
   const isDark = theme === 'dark';
   const isRtl = lang === 'fa';
 
-  const fetchNews = async (isManualRefresh = false) => {
-    if (isManualRefresh) setRefreshing(true);
-    setError(null);
+  const closeNewsModal = useCallback(() => {
+    if (modalClosingRef.current) return;
+    const backdrop = modalBackdropRef.current;
+    const panel = modalPanelRef.current;
+    if (!backdrop || !panel) {
+      setSelectedNews(null);
+      return;
+    }
+
+    modalClosingRef.current = true;
+    gsap.timeline({
+      onComplete: () => {
+        setSelectedNews(null);
+        modalClosingRef.current = false;
+      },
+    })
+      .to(panel, { opacity: 0, scale: 0.96, y: 8, duration: 0.16, ease: 'power2.in' }, 0)
+      .to(backdrop, { opacity: 0, duration: 0.16, ease: 'power2.in' }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedNews) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const backdrop = modalBackdropRef.current;
+    const panel = modalPanelRef.current;
+    modalScrollPositionRef.current = window.scrollY;
+    document.body.style.overflow = 'hidden';
+    modalClosingRef.current = false;
+
+    if (backdrop && panel) {
+      gsap.fromTo(
+        backdrop,
+        { opacity: 0 },
+        { opacity: 1, duration: 0.2, ease: 'power2.out' }
+      );
+      gsap.fromTo(
+        panel,
+        { opacity: 0, scale: 0.96, y: 10 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.24, ease: 'power3.out' }
+      );
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeNewsModal();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      gsap.killTweensOf(backdrop);
+      gsap.killTweensOf(panel);
+      document.body.style.overflow = previousOverflow;
+      window.scrollTo(0, modalScrollPositionRef.current);
+    };
+  }, [selectedNews, closeNewsModal]);
+
+  const fetchNews = useCallback(async (silent = false) => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    const controller = new AbortController();
+    refreshControllerRef.current = controller;
+    if (!silent) setError(null);
     try {
-      const data = await fetchNewsData();
+      const data = await fetchNewsData(controller.signal);
+      if (controller.signal.aborted) return;
       setArticles(data.articles);
       storeNews(data);
       setLastUpdated(new Date(data.lastUpdated || Date.now()));
-    } catch (err: any) {
+      setError(null);
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
       console.error('Error fetching news:', err);
-      setError(err.message || 'خطا در بارگذاری اخبار');
+      if (!silent) {
+        setError(err instanceof Error ? err.message : 'خطا در بارگذاری اخبار');
+      }
     } finally {
-      if (isManualRefresh) setRefreshing(false);
+      if (refreshControllerRef.current === controller) {
+        refreshControllerRef.current = null;
+        refreshInFlightRef.current = false;
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
-    let isMounted = true;
     const cachedData = readStoredNews();
     if (cachedData) {
       setArticles(cachedData.articles);
       setLastUpdated(new Date(cachedData.lastUpdated || Date.now()));
     }
 
-    const initialLoad = async () => {
-      try {
-        const data = await fetchNewsData();
-        if (isMounted) {
-          setArticles(data.articles);
-          storeNews(data);
-          setLastUpdated(new Date(data.lastUpdated || Date.now()));
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          setError(err.message || 'خطا در بارگذاری اخبار');
-        }
-      }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void fetchNews(true);
     };
 
-    initialLoad();
-
-    const interval = setInterval(() => {
-      initialLoad();
-    }, 90000); // 90 seconds auto refresh
+    void fetchNews(false);
+    const interval = window.setInterval(() => void fetchNews(true), 60000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    window.addEventListener('focus', refreshWhenVisible);
 
     return () => {
-      isMounted = false;
-      clearInterval(interval);
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.removeEventListener('focus', refreshWhenVisible);
+      refreshControllerRef.current?.abort();
+      refreshControllerRef.current = null;
+      refreshInFlightRef.current = false;
     };
-  }, []);
+  }, [fetchNews]);
 
   // Filtered Articles
   const filteredArticles = useMemo(() => {
@@ -494,6 +418,41 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
     [articles]
   );
 
+  const translateSelectedNews = async () => {
+    if (!selectedNews) return;
+    if (showFullPersian) {
+      setShowFullPersian(false);
+      return;
+    }
+
+    const cachedTranslation = fullPersianTranslations[selectedNews.id];
+    if (cachedTranslation) {
+      setShowFullPersian(true);
+      return;
+    }
+
+    const originalTitle = selectedNews.originalTitle || selectedNews.title;
+    const originalContent = getFullNewsText(selectedNews);
+    setFullTranslationLoading(true);
+    setFullTranslationError(null);
+    try {
+      const [title, content] = await Promise.all([
+        translateToPersian(originalTitle),
+        originalContent ? translateLongTextToPersian(originalContent) : Promise.resolve(''),
+      ]);
+      setFullPersianTranslations((current) => ({
+        ...current,
+        [selectedNews.id]: { title, content },
+      }));
+      setShowFullPersian(true);
+    } catch (err) {
+      console.error(`Unable to translate full news article ${selectedNews.id}:`, err);
+      setFullTranslationError('ترجمه انجام نشد. دوباره تلاش کنید.');
+    } finally {
+      setFullTranslationLoading(false);
+    }
+  };
+
   return (
     <div id="crypto-news-module" className="flex flex-col gap-6">
       {/* HEADER CONTROLS & FILTER BAR */}
@@ -505,7 +464,7 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
             : 'bg-white border-slate-200 shadow-sm'
         }`}
       >
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-4 border-b border-slate-800/40">
+        <div className="flex items-center gap-3 pb-4 border-b border-slate-800/40">
           <div className="flex items-center gap-3">
             <DidehbonLogoIcon size={38} withGlow={isDark} />
             <div className="flex items-center gap-3 flex-wrap">
@@ -524,24 +483,6 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
             </div>
           </div>
 
-          {/* Quick Refresh & Source Badges */}
-          <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-end flex-wrap">
-            <Live3DClock isDark={isDark} lang={lang} />
-
-            <button
-              id="btn-refresh-news"
-              onClick={() => fetchNews(true)}
-              disabled={refreshing}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-                isDark
-                  ? 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
-              }`}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-blue-400' : ''}`} />
-              <span>{refreshing ? t.refreshing : t.refresh}</span>
-            </button>
-          </div>
         </div>
 
         {/* SEARCH AND FILTER BUTTONS */}
@@ -767,13 +708,37 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
                 }`}
               >
                 {/* News Thumbnail Image with floating metadata */}
-                <div className="relative mb-3">
+                <div className="group/image relative mb-3">
                   <NewsCardImage
                     src={article.imageUrl || article.image_url || article.image}
                     alt={article.title}
                     source={article.source}
                     isDark={isDark}
                   />
+
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-label={lang === 'fa' ? 'مطالعه کامل خبر' : 'Read full article'}
+                    onClick={() => {
+                      setShowFullPersian(false);
+                      setFullTranslationError(null);
+                      setSelectedNews(article);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setShowFullPersian(false);
+                        setFullTranslationError(null);
+                        setSelectedNews(article);
+                      }
+                    }}
+                    className="absolute inset-0 z-[1] flex cursor-pointer items-end justify-center rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                  >
+                    <span className="pointer-events-none mb-3 rounded-full bg-black/70 px-3 py-1 text-[10px] font-semibold text-white opacity-0 backdrop-blur transition-opacity duration-200 group-hover/image:opacity-100">
+                      {lang === 'fa' ? 'مطالعه کامل خبر' : 'Read full article'}
+                    </span>
+                  </div>
 
                   {/* Source Badge */}
                   <div className="absolute top-2.5 left-2.5 pointer-events-none">
@@ -920,6 +885,131 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
           })}
         </div>
       )}
+
+      {selectedNews && (() => {
+        const fullTranslation = fullPersianTranslations[selectedNews.id];
+        const originalTitle = selectedNews.originalTitle || selectedNews.title;
+        const originalContent = getFullNewsText(selectedNews);
+        const modalImage = selectedNews.imageUrl || selectedNews.image_url || selectedNews.image;
+        const sourceName = lang === 'fa'
+          ? selectedNews.sourceNameFa || selectedNews.sourceNameEn || selectedNews.source
+          : selectedNews.sourceNameEn || selectedNews.sourceNameFa || selectedNews.source;
+        const displayTitle = showFullPersian && fullTranslation
+          ? fullTranslation.title
+          : originalTitle;
+        const displayContent = showFullPersian && fullTranslation
+          ? fullTranslation.content
+          : originalContent;
+
+        return (
+          <div
+            ref={modalBackdropRef}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+            onClick={closeNewsModal}
+          >
+            <section
+              ref={modalPanelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="news-modal-title"
+              onClick={(event) => event.stopPropagation()}
+              className={`relative flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border shadow-2xl ${
+                isDark
+                  ? 'border-slate-700 bg-[#0F172A] text-slate-100'
+                  : 'border-slate-200 bg-white text-slate-900'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={closeNewsModal}
+                aria-label={lang === 'fa' ? 'بستن خبر' : 'Close article'}
+                className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/70 text-2xl leading-none text-white backdrop-blur transition-colors hover:bg-black"
+              >
+                ×
+              </button>
+
+              <div className="relative flex max-h-[42vh] min-h-40 shrink-0 items-center justify-center overflow-hidden bg-black/30">
+                {modalImage ? (
+                  <Image
+                    src={modalImage}
+                    alt={originalTitle}
+                    width={1200}
+                    height={800}
+                    unoptimized
+                    className="max-h-[42vh] w-full object-contain"
+                  />
+                ) : (
+                  <Newspaper className="h-14 w-14 text-slate-500" />
+                )}
+                <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-4 pb-3 pt-8 text-xs text-white">
+                  <span className="rounded-md border border-white/20 bg-black/40 px-2 py-1 font-semibold backdrop-blur">
+                    {sourceName}
+                  </span>
+                  <time dateTime={selectedNews.publishedAt} className="text-white/85">
+                    {formatRelativeTime(selectedNews.publishedAt, lang)}
+                  </time>
+                </div>
+              </div>
+
+              <div className="min-h-0 overflow-y-auto p-5 sm:p-6">
+                <h2
+                  id="news-modal-title"
+                  dir="auto"
+                  className="mb-4 text-lg font-bold leading-relaxed sm:text-xl"
+                >
+                  {displayTitle}
+                </h2>
+
+                <div className={`mb-5 whitespace-pre-wrap break-words text-sm leading-8 ${
+                  isDark ? 'text-slate-300' : 'text-slate-700'
+                }`} dir="auto">
+                  {displayContent || (lang === 'fa' ? 'متن کامل خبر در دسترس نیست.' : 'Full article text is unavailable.')}
+                </div>
+
+                {fullTranslationError && (
+                  <p role="alert" className="mb-4 text-sm text-red-500">
+                    {fullTranslationError}
+                  </p>
+                )}
+
+                <div className={`flex flex-wrap items-center gap-3 border-t pt-4 ${
+                  isDark ? 'border-slate-700' : 'border-slate-200'
+                }`}>
+                  <button
+                    type="button"
+                    onClick={() => void translateSelectedNews()}
+                    disabled={fullTranslationLoading}
+                    className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                      isDark
+                        ? 'bg-cyan-950/70 text-cyan-300 hover:bg-cyan-900'
+                        : 'bg-cyan-50 text-cyan-800 hover:bg-cyan-100'
+                    }`}
+                  >
+                    {fullTranslationLoading
+                      ? (lang === 'fa' ? 'در حال ترجمه...' : 'Translating...')
+                      : showFullPersian
+                        ? (lang === 'fa' ? 'نمایش متن اصلی' : 'Show original')
+                        : (lang === 'fa' ? 'ترجمه به فارسی' : 'Translate to Persian')}
+                  </button>
+                  <a
+                    href={selectedNews.url || selectedNews.link || '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                      isDark
+                        ? 'bg-blue-950/70 text-blue-300 hover:bg-blue-900'
+                        : 'bg-blue-50 text-blue-800 hover:bg-blue-100'
+                    }`}
+                  >
+                    {lang === 'fa' ? 'مشاهده منبع اصلی' : 'View original source'}
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              </div>
+            </section>
+          </div>
+        );
+      })()}
     </div>
   );
 }

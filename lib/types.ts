@@ -108,6 +108,7 @@ export interface NewsArticle {
   title: string;
   summary: string;
   content?: string;
+  description?: string;
   body?: string;
   fullContent?: string;
   originalTitle?: string;

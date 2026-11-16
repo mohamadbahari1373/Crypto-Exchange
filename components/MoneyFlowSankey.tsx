@@ -8,11 +8,18 @@ import UsdtMoneyFlowSankey from '@/components/UsdtMoneyFlowSankey';
 import {
   createWallexRadarFallbackCoin,
   fetchSevenExchangeRadar,
-  normalizeSevenExchangeSymbol,
+  normalizeAssetSymbol,
   type SevenExchangeRadarCoin,
   type SevenExchangeRadarResponse,
   type WallexRadarCoin,
 } from '@/lib/sevenExchangeRadar';
+import {
+  getSignalHistory,
+  syncSignalHistory,
+  type SignalCandidate,
+  type SignalHistoryRecord,
+} from '@/lib/signalHistory';
+import SignalHistoryPanel from '@/components/SignalHistoryPanel';
 import {
   TrendingUp,
   TrendingDown,
@@ -107,6 +114,7 @@ interface RadarCoinItem {
   buyPressurePercent?: number;
   sellPressurePercent?: number;
   priceChange24h?: number;
+  isWallexFallback?: boolean;
 }
 
 type FlowIntensityStatus = 'smart_inflow' | 'neutral' | 'heavy_outflow' | 'normal';
@@ -211,11 +219,28 @@ function isActiveRadarSignal(coin: SevenExchangeRadarCoin | undefined): boolean 
   return Boolean(
     coin &&
     coin.hasSignal &&
-    Math.abs(coin.globalNetFlow1h) >= 5_000 &&
-    Math.abs(coin.predictedUsdtPct) >= 0.15 &&
-    ((coin.zScore >= 1.15 && coin.predictedUsdtPct > 0) ||
-      (coin.zScore <= -1.15 && coin.predictedUsdtPct < 0)),
+    Math.abs(coin.globalNetFlow1h) >= 25_000 &&
+    Math.abs(coin.predictedUsdtPct) >= 1.0 &&
+    ((coin.zScore >= 1.5 && coin.predictedUsdtPct > 0) ||
+      (coin.zScore <= -1.5 && coin.predictedUsdtPct < 0)),
   );
+}
+
+function getMoneyFlowCoinNameFa(source: MoneyFlowResponse, symbol: string): string {
+  const normalizedSymbol = normalizeAssetSymbol(symbol);
+  return source.coinStats.find(
+    (coin) => normalizeAssetSymbol(coin.symbol) === normalizedSymbol,
+  )?.nameFa
+    || source.radar?.topInflows.find(
+      (coin) => normalizeAssetSymbol(coin.symbol) === normalizedSymbol,
+    )?.nameFa
+    || source.radar?.topOutflows.find(
+      (coin) => normalizeAssetSymbol(coin.symbol) === normalizedSymbol,
+    )?.nameFa
+    || source.wallexCoins?.find(
+      (coin) => normalizeAssetSymbol(coin.symbol) === normalizedSymbol,
+    )?.nameFa
+    || normalizedSymbol;
 }
 
 function SevenExchangeSignalBadge({
@@ -228,20 +253,13 @@ function SevenExchangeSignalBadge({
   onSelect: (coin: SevenExchangeRadarCoin, nameFa: string) => void;
 }) {
   const active = isActiveRadarSignal(coin);
-  const bullish = active && coin.zScore >= 1.15 && coin.predictedUsdtPct > 0;
-  const bearish = active && coin.zScore <= -1.15 && coin.predictedUsdtPct < 0;
-  const strong = Math.abs(coin.zScore) >= 2;
+  const bullish = active && coin.zScore >= 1.5 && coin.predictedUsdtPct > 0;
+  const strong = Math.abs(coin.zScore) >= 2 && Math.abs(coin.predictedUsdtPct) >= 1.5;
   const direction = bullish ? 'صعودی' : 'نزولی';
   const formatPct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
-  const timeframe = coin.timeframe === 'فوری (۱۵ تا ۶۰ دقیقه)'
+  const timeframe = strong
     ? 'فوری (۱۵ تا ۶۰ دقیقه)'
     : '۱ تا ۴ ساعت آینده';
-  const badgeLabel = bullish
-    ? `🟢 سیگنال ${strong ? 'قوی ' : ''}صعودی (${formatPct(coin.predictedUsdtPct)}) • ${timeframe}`
-    : bearish
-      ? `🔴 سیگنال ${strong ? 'قوی ' : ''}نزولی (${formatPct(coin.predictedUsdtPct)}) • ${timeframe}`
-      : '📊 تحلیل رادار';
-
   return (
     <button
         type="button"
@@ -261,7 +279,12 @@ function SevenExchangeSignalBadge({
         }`}
     >
       {active && <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${bullish ? 'bg-emerald-300' : 'bg-rose-300'}`} />}
-      {badgeLabel}
+        {active
+          ? <>
+              {bullish ? '🟢 سیگنال' : '🔴 سیگنال'} {strong ? 'قوی ' : ''}{bullish ? 'صعودی' : 'نزولی'} (
+              <span dir="ltr">{formatPct(coin.predictedUsdtPct)}</span>) • {timeframe}
+            </>
+          : '📊 تحلیل رادار'}
     </button>
   );
 }
@@ -276,9 +299,9 @@ function SevenExchangeRadarModal({
   onClose: () => void;
 }) {
   const active = isActiveRadarSignal(coin);
-  const bullish = active && coin.zScore >= 1.15 && coin.predictedUsdtPct > 0;
-  const bearish = active && coin.zScore <= -1.15 && coin.predictedUsdtPct < 0;
-  const strong = Math.abs(coin.zScore) >= 2;
+  const bullish = active && coin.zScore >= 1.5 && coin.predictedUsdtPct > 0;
+  const bearish = active && coin.zScore <= -1.5 && coin.predictedUsdtPct < 0;
+  const strong = Math.abs(coin.zScore) >= 2 && Math.abs(coin.predictedUsdtPct) >= 1.5;
   const formatPct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   const formatCompact = (value: number) => {
     const absolute = Math.abs(value);
@@ -289,16 +312,16 @@ function SevenExchangeRadarModal({
         : absolute >= 1_000
           ? { divisor: 1_000, suffix: 'K' }
           : null;
-    if (!unit) return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (!unit) return value.toLocaleString('en-US', {
+      maximumFractionDigits: absolute < 1 ? 6 : 2,
+    });
     const compact = (absolute / unit.divisor).toFixed(1).replace(/\.0$/, '');
     return `${compact}${unit.suffix}`;
   };
-  const flowText = !coin.flowEstimateAvailable
+  const flowText = !coin.flowDataAvailable
     ? 'اطلاعات کافی نیست'
-    : Math.abs(coin.globalNetFlow1h) < 1
-      ? '<$1'
-      : `${coin.globalNetFlow1h > 0 ? '+' : '-'}$${formatCompact(coin.globalNetFlow1h)}`;
-  const timeframe = coin.timeframe === 'فوری (۱۵ تا ۶۰ دقیقه)'
+    : `${coin.globalNetFlow1h < 0 ? '-' : '+'}$${formatCompact(coin.globalNetFlow1h)}`;
+  const timeframe = strong
     ? '۱۵ تا ۶۰ دقیقه آینده'
     : coin.timeframe === 'کوتاه‌مدت (۱ تا ۴ ساعت)'
       ? '۱ تا ۴ ساعت آینده'
@@ -349,6 +372,23 @@ function SevenExchangeRadarModal({
               ? <>{bullish ? '🟢 سیگنال' : '🔴 سیگنال'} {strong ? 'قوی ' : ''}{bullish ? 'صعودی' : 'نزولی'} (<span dir="ltr">{timeframe}</span>)</>
               : '⚪ جریان عادی بازار'}
           </p>
+          {coin.isWallexFallback && (
+            <p className="py-3 text-amber-300">
+              {coin.referenceListingStatus === 'unlisted'
+                ? 'این ارز در ۶ صرافی مرجع جهانی لیست نیست'
+                : 'وضعیت لیست‌شدن این ارز در ۶ صرافی مرجع مشخص نیست'}
+            </p>
+          )}
+          {!coin.isWallexFallback && !coin.candleDataAvailable && (
+            <p className="py-3 text-amber-300">
+              ۲۴ کندل کامل ۱ساعته برای این ارز در دسترس نیست
+            </p>
+          )}
+          {!coin.isWallexFallback && !coin.flowDataAvailable && (
+            <p className="py-3 text-amber-300">
+              دادهٔ جریان خرید و فروش تهاجمی Binance برای این ارز در دسترس نیست
+            </p>
+          )}
           {active && (
             <p className="py-3">
               هدف قیمتی: دلاری <span dir="ltr">{formatPct(coin.predictedUsdtPct)}</span> | تومانی <span dir="ltr">{formatPct(coin.predictedTmnPct)}</span>
@@ -442,10 +482,11 @@ const COIN_PALETTE: Record<string, string> = {
 export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) {
   const [data, setData] = useState<MoneyFlowResponse | null>(null);
   const [sevenExchangeRadar, setSevenExchangeRadar] = useState<SevenExchangeRadarResponse | null>(null);
+  const [signalHistory, setSignalHistory] = useState<SignalHistoryRecord[]>([]);
   const [selectedRadarCoin, setSelectedRadarCoin] = useState<SelectedRadarCoin | null>(null);
   const [signalOnly, setSignalOnly] = useState(false);
   const filterCurrency = 'ALL';
-  const coinLimit = '30';
+  const coinLimit = 'all';
   const activeViewMode = 'toman';
 
   // Chart-specific density & solo filters:
@@ -456,6 +497,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
   // Search & Filter State for Table & Modal
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'INFLOW' | 'OUTFLOW'>('ALL');
+  const [coinTableExpanded, setCoinTableExpanded] = useState(false);
   const [selectedCoinForModal, setSelectedCoinForModal] = useState<CoinFlowStat | null>(null);
 
   // Live WebSocket state from official Wallex docs (wss://api.wallex.ir/ws)
@@ -482,6 +524,16 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void getSignalHistory().then((records) => {
+      if (active) setSignalHistory(records);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const fetchRadar = useCallback(async (
     source: MoneyFlowResponse,
     forceRefresh = false,
@@ -497,6 +549,32 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
         setSevenExchangeRadar(payload);
         setRadarError(false);
       }
+      const currentPrices: Record<string, number> = {};
+      const candidates: SignalCandidate[] = [];
+      for (const coin of payload.coins) {
+        const symbol = normalizeAssetSymbol(coin.symbol);
+        if (Number.isFinite(coin.priceUsd) && coin.priceUsd > 0) {
+          currentPrices[symbol] = coin.priceUsd;
+        }
+        if (!isActiveRadarSignal(coin)) continue;
+        candidates.push({
+          symbol,
+          nameFa: getMoneyFlowCoinNameFa(source, symbol),
+          direction: coin.predictedUsdtPct >= 0 ? 'bullish' : 'bearish',
+          predictedUsdtPct: coin.predictedUsdtPct,
+          zScore: coin.zScore,
+          netFlowUsd: coin.globalNetFlow1h,
+          confidence: coin.confidence,
+          entryPriceUsdt: coin.priceUsd,
+        });
+      }
+      void syncSignalHistory(candidates, currentPrices)
+        .then((records) => {
+          if (radarMounted.current) setSignalHistory(records);
+        })
+        .catch((error: unknown) => {
+          console.error('Unable to synchronize radar signal history.', error);
+        });
     } catch {
       if (radarMounted.current) setRadarError(true);
     }
@@ -534,49 +612,104 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
   }, [selectedRadarCoin]);
 
   const radarBySymbol = useMemo(() => {
-    const entries = sevenExchangeRadar?.coins.map((coin) => [normalizeSevenExchangeSymbol(coin.symbol), coin] as const) ?? [];
+    const entries = sevenExchangeRadar?.coins.map((coin) => [normalizeAssetSymbol(coin.symbol), coin] as const) ?? [];
     return new Map(entries);
   }, [sevenExchangeRadar]);
 
+  const activeRadarCoins = useMemo(() => {
+    const uniqueCoins = new Map<string, SevenExchangeRadarCoin>();
+    for (const coin of sevenExchangeRadar?.coins ?? []) {
+      const symbol = normalizeAssetSymbol(coin.symbol);
+      if (symbol && isActiveRadarSignal(coin) && !uniqueCoins.has(symbol)) {
+        uniqueCoins.set(symbol, coin);
+      }
+    }
+    return [...uniqueCoins.values()];
+  }, [sevenExchangeRadar]);
+  const activeSignalSymbols = useMemo(
+    () => new Set(activeRadarCoins.map((coin) => normalizeAssetSymbol(coin.symbol))),
+    [activeRadarCoins],
+  );
+
+  const getCoinNameFa = useCallback((symbol: string) => {
+    return data ? getMoneyFlowCoinNameFa(data, symbol) : normalizeAssetSymbol(symbol);
+  }, [data]);
+
+  const createRadarListItem = useCallback((
+    radarCoin: SevenExchangeRadarCoin,
+  ): RadarCoinItem => {
+    const symbol = normalizeAssetSymbol(radarCoin.symbol);
+    const wallexMarketCoin = data?.wallexCoins?.find(
+      (coin) => normalizeAssetSymbol(coin.symbol) === symbol,
+    );
+    const wallexCoin = data?.coinStats.find(
+      (coin) => normalizeAssetSymbol(coin.symbol) === symbol,
+    );
+    if (wallexCoin) {
+      return {
+        symbol,
+        nameFa: wallexCoin.nameFa,
+        netFlowToman: wallexCoin.netFlowToman,
+        inflowToman: wallexCoin.inflowToman,
+        outflowToman: wallexCoin.outflowToman,
+        volume24hToman: wallexCoin.totalVolumeToman,
+        buyPressurePercent: wallexCoin.buyPressurePercent,
+        sellPressurePercent: wallexCoin.sellPressurePercent,
+        priceChange24h: wallexCoin.priceChange24h,
+      };
+    }
+
+    return {
+      symbol,
+      nameFa: getCoinNameFa(symbol),
+      netFlowToman: 0,
+      inflowToman: 0,
+      outflowToman: 0,
+      volume24hToman: 0,
+      priceChange24h: wallexMarketCoin?.priceChange24h ?? 0,
+      isWallexFallback: true,
+    };
+  }, [data, getCoinNameFa]);
+
   const getRadarCoin = useCallback((
     coin: CoinFlowStat | RadarCoinItem,
-    direction?: 'inflow' | 'outflow',
   ): SevenExchangeRadarCoin => {
-    const symbol = normalizeSevenExchangeSymbol(coin.symbol);
+    const symbol = normalizeAssetSymbol(coin.symbol);
     const radarCoin = radarBySymbol.get(symbol);
     if (radarCoin) return radarCoin;
 
     const wallexCoin = data?.coinStats.find(
-      (item) => normalizeSevenExchangeSymbol(item.symbol) === symbol,
+      (item) => normalizeAssetSymbol(item.symbol) === symbol,
     );
     const source = wallexCoin ?? coin;
-    const netFlowToman = wallexCoin
-      ? wallexCoin.netFlowToman
-      : direction === 'outflow'
-        ? -Math.abs(coin.netFlowToman)
-        : direction === 'inflow'
-          ? Math.abs(coin.netFlowToman)
-          : coin.netFlowToman;
     const usdtPriceToman = data?.usdtPriceToman || sevenExchangeRadar?.usdtTmnRate || 234600;
 
     return createWallexRadarFallbackCoin({
       symbol,
       buyVolumeToman: source.inflowToman,
       sellVolumeToman: source.outflowToman,
-      netFlowToman,
       lastPriceToman: wallexCoin?.lastPriceToman ?? 0,
       priceChange24h: source.priceChange24h ?? 0,
       usdtPriceToman,
       usdtTmnMomentumPct: sevenExchangeRadar?.usdtTmnMomentumPct ?? 0,
+      referenceListingStatus: [
+        'Binance',
+        'OKX',
+        'Bybit',
+        'Coinbase',
+        'Kraken',
+        'Upbit',
+      ].every((exchange) => sevenExchangeRadar?.exchangeStatus[exchange] === true)
+        ? 'unlisted'
+        : 'unknown',
     });
   }, [data, radarBySymbol, sevenExchangeRadar]);
 
   const openRadarCoin = useCallback((
     coin: CoinFlowStat | RadarCoinItem,
-    direction?: 'inflow' | 'outflow',
   ) => {
     setSelectedRadarCoin({
-      coin: getRadarCoin(coin, direction),
+      coin: getRadarCoin(coin),
       nameFa: coin.nameFa,
     });
   }, [getRadarCoin]);
@@ -754,8 +887,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
 
               // Channel all@price: update coin price instantly
               if (channel === 'all@price' && payload?.symbol && payload?.price) {
-                const sym = payload.symbol.replace(/TMN$|IRT$|USDT$/, '');
-                const cleanSym = (sym === 'TON' || sym === 'TONCOIN') ? 'GRAM' : sym;
+                const cleanSym = normalizeAssetSymbol(payload.symbol);
                 const newPrice = parseFloat(payload.price);
                 const newCh = typeof payload['24h_ch'] === 'number' ? payload['24h_ch'] : parseFloat(payload['24h_ch'] || '0');
 
@@ -763,7 +895,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                   setData((prev) => {
                     if (!prev) return prev;
                     const updatedCoinStats = prev.coinStats.map((coin) => {
-                      if (coin.symbol === cleanSym) {
+                      if (normalizeAssetSymbol(coin.symbol) === cleanSym) {
                         return {
                           ...coin,
                           lastPriceToman: payload.symbol.endsWith('TMN') || payload.symbol.endsWith('IRT')
@@ -854,8 +986,13 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     return `$${Math.round(num).toLocaleString()}`;
   }, []);
 
-  const renderFlowIntensityBadge = (netFlowToman: number, volume24hToman: number | undefined) => {
+  const renderFlowIntensityBadge = (
+    netFlowToman: number,
+    volume24hToman: number | undefined,
+    hasActiveSignal = false,
+  ) => {
     const { intensity, status } = getFlowIntensityStatus(netFlowToman, volume24hToman);
+    if (hasActiveSignal && status === 'neutral') return null;
     const badge = {
       smart_inflow: {
         fa: 'ورود هوشمند 🟢',
@@ -907,11 +1044,43 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
   // Filtered Coins for Table
   const filteredCoins = useMemo(() => {
     if (!data?.coinStats) return [];
-    let list = data.coinStats;
+    let list: CoinFlowStat[] = signalOnly
+      ? activeRadarCoins.map((radarCoin) => {
+          const symbol = normalizeAssetSymbol(radarCoin.symbol);
+          const wallexCoin = data.coinStats.find(
+            (coin) => normalizeAssetSymbol(coin.symbol) === symbol,
+          );
+          if (wallexCoin) return wallexCoin;
 
-    if (signalOnly) {
-      list = list.filter((coin) => isActiveRadarSignal(radarBySymbol.get(normalizeSevenExchangeSymbol(coin.symbol))));
-    }
+          const marketCoin = data.wallexCoins?.find(
+            (coin) => normalizeAssetSymbol(coin.symbol) === symbol,
+          );
+          const lastPriceToman = radarCoin.priceUsd * (data.usdtPriceToman || 234600);
+          return {
+            symbol,
+            nameFa: getCoinNameFa(symbol),
+            flowStatus: 'BALANCED',
+            verdictFa: 'در بازه فعلی والکس معامله‌ای ثبت نشده است',
+            verdictEn: 'No Wallex trades in the current interval',
+            inflowToman: 0,
+            outflowToman: 0,
+            netFlowToman: 0,
+            inflowUsdt: 0,
+            outflowUsdt: 0,
+            netFlowUsdt: 0,
+            tomanMarketInflow: 0,
+            tomanMarketOutflow: 0,
+            usdtMarketInflow: 0,
+            usdtMarketOutflow: 0,
+            totalVolumeToman: 0,
+            buyPressurePercent: 0,
+            sellPressurePercent: 0,
+            totalTrades: 0,
+            lastPriceToman,
+            priceChange24h: marketCoin?.priceChange24h ?? 0,
+          };
+        })
+      : data.coinStats;
 
     if (statusFilter === 'INFLOW') {
       list = list.filter((c) => c.flowStatus === 'NET_INFLOW');
@@ -929,7 +1098,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     }
 
     return list;
-  }, [data, statusFilter, searchQuery, signalOnly, radarBySymbol]);
+  }, [activeRadarCoins, data, getCoinNameFa, statusFilter, searchQuery, signalOnly]);
 
   // Major spotlight coins: BTC and ETH specifically
   const btcStat = useMemo(() => data?.coinStats.find((c) => c.symbol === 'BTC'), [data]);
@@ -938,12 +1107,23 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
   // List of top coins for quick solo filtering
   const topCoinsForFilter = useMemo(() => {
     if (!data?.coinStats) return [];
-    return data.coinStats.slice(0, 8);
-  }, [data]);
+    const coins = signalOnly
+      ? data.coinStats.filter((coin) => activeSignalSymbols.has(normalizeAssetSymbol(coin.symbol)))
+      : data.coinStats;
+    return coins.slice(0, 8);
+  }, [activeSignalSymbols, data, signalOnly]);
 
-  const filterRadarCoins = (coins: RadarCoinItem[]) => signalOnly
-    ? coins.filter((coin) => isActiveRadarSignal(radarBySymbol.get(normalizeSevenExchangeSymbol(coin.symbol))))
-    : coins;
+  const filterRadarCoins = (coins: RadarCoinItem[], direction: 'inflow' | 'outflow') => {
+    if (!signalOnly) return coins;
+
+    return activeRadarCoins
+      .filter((coin) => direction === 'inflow'
+        ? coin.predictedUsdtPct > 0
+        : coin.predictedUsdtPct < 0)
+      .map(createRadarListItem);
+  };
+  const topOutflowCoins = filterRadarCoins(data?.radar?.topOutflows ?? [], 'outflow');
+  const topInflowCoins = filterRadarCoins(data?.radar?.topInflows ?? [], 'inflow');
 
   // --------------------------------------------------------------------------
   // CLEAN & CRYSTAL SANKEY GRAPH CONFIGURATION
@@ -951,27 +1131,44 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
   const cleanSankeyOption = useMemo(() => {
     if (!data?.coinStats || !data?.sankey) return {};
 
-    const allStats = data.coinStats;
+    const allStats = signalOnly
+      ? data.coinStats.filter((coin) => activeSignalSymbols.has(normalizeAssetSymbol(coin.symbol)))
+      : data.coinStats;
     let allowedSymbols: string[] = [];
 
-    if (selectedSoloCoin !== 'ALL') {
+    if (
+      selectedSoloCoin !== 'ALL' &&
+      (!signalOnly || activeSignalSymbols.has(normalizeAssetSymbol(selectedSoloCoin)))
+    ) {
       allowedSymbols = [selectedSoloCoin];
     } else if (sankeyDensity === 'top8') {
       allowedSymbols = allStats.slice(0, 8).map((c) => c.symbol);
     } else if (sankeyDensity === 'top15') {
       allowedSymbols = allStats.slice(0, 15).map((c) => c.symbol);
     } else {
-      allowedSymbols = allStats.slice(0, 25).map((c) => c.symbol);
+      allowedSymbols = allStats.map((c) => c.symbol);
     }
 
-    const symbolSet = new Set(allowedSymbols);
+    const symbolSet = new Set(allowedSymbols.map(normalizeAssetSymbol));
 
     // Build focused links
     let rawLinks = data.sankey.links || [];
-    let focusedLinks = rawLinks.filter((l) => {
-      const isSrcCoin = symbolSet.has(l.source);
-      const isTgtCoin = symbolSet.has(l.target);
-      return isSrcCoin || isTgtCoin;
+    let focusedLinks = rawLinks.flatMap((link) => {
+      const sourceSymbol = normalizeAssetSymbol(link.source);
+      const targetSymbol = normalizeAssetSymbol(link.target);
+      const isSrcCoin = symbolSet.has(sourceSymbol);
+      const isTgtCoin = symbolSet.has(targetSymbol);
+      if (signalOnly) {
+        const sourceIsBoundary = link.source.includes('ورود') || link.source.includes('خروج');
+        const targetIsBoundary = link.target.includes('ورود') || link.target.includes('خروج');
+        if ((!sourceIsBoundary && !isSrcCoin) || (!targetIsBoundary && !isTgtCoin)) return [];
+      }
+      if (!isSrcCoin && !isTgtCoin) return [];
+      return [{
+        ...link,
+        source: isSrcCoin ? sourceSymbol : link.source,
+        target: isTgtCoin ? targetSymbol : link.target,
+      }];
     });
 
     if (sankeyDirection === 'inflow_only') {
@@ -1002,7 +1199,7 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
       }
 
       return {
-        name,
+        name: isSource || isSink ? name : normalizeAssetSymbol(name),
         depth,
         itemStyle: {
           color,
@@ -1165,6 +1362,8 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
     selectedSoloCoin,
     activeViewMode,
     isDark,
+    signalOnly,
+    activeSignalSymbols,
     formatToman,
     formatUsdt,
   ]);
@@ -1204,6 +1403,8 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
 
         </div>
       </div>
+
+      <SignalHistoryPanel records={signalHistory} isDark={isDark} lang={lang} />
 
       {/* Live Trades Stream from Wallex WebSocket (Screenshot 1: wss://api.wallex.ir/ws MARKET@trade) */}
       {recentLiveTrades.length > 0 && (
@@ -1375,12 +1576,33 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-900/50 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span>
-            پوشش نقدینگی مرجع (Binance • OKX • Kraken + Wallex):
+            پوشش نقدینگی مرجع (Binance • OKX • Bybit • Coinbase • Kraken • Upbit + Wallex):
             {' '}
             <strong className="font-mono text-cyan-300">{sevenExchangeRadar?.commonCoins ?? '—'}</strong>
           </span>
-          <span>
-            سیگنال فعال: <strong className="font-mono text-emerald-300">{sevenExchangeRadar?.activeSignals ?? '—'}</strong>
+          <span className="flex flex-wrap items-center gap-1.5">
+            سیگنال فعال: <strong className="font-mono text-emerald-300">{sevenExchangeRadar ? activeRadarCoins.length : '—'}</strong>
+            {activeRadarCoins.map((coin) => {
+              const symbol = normalizeAssetSymbol(coin.symbol);
+              const nameFa = getCoinNameFa(symbol);
+              const bullish = coin.predictedUsdtPct > 0;
+              const change = `${coin.predictedUsdtPct >= 0 ? '+' : ''}${coin.predictedUsdtPct.toFixed(2)}%`;
+              return (
+                <button
+                  key={symbol}
+                  type="button"
+                  onClick={() => setSelectedRadarCoin({ coin, nameFa })}
+                  className={`rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                    bullish
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                      : 'border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+                  }`}
+                  aria-label={`نمایش جزئیات سیگنال ${symbol} (${change})`}
+                >
+                  {bullish ? '🟢' : '🔴'} {symbol} (<span dir="ltr">{change}</span>)
+                </button>
+              );
+            })}
           </span>
           {radarError && <span role="status" className="text-amber-300">داده رادار در دسترس نیست.</span>}
         </div>
@@ -1408,7 +1630,9 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
             </h3>
           </div>
           <span className="text-xs text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-full">
-            {lang === 'fa' ? `نرخ تتر مبنا: ${formatToman(data?.usdtPriceToman || 234600)}` : `USDT Rate: ${formatToman(data?.usdtPriceToman || 234600)}`}
+            {lang === 'fa'
+              ? <>نرخ تتر مبنا: <span dir="ltr">{formatToman(data?.usdtPriceToman || 234600)}</span></>
+              : <>USDT Rate: <span dir="ltr">{formatToman(data?.usdtPriceToman || 234600)}</span></>}
           </span>
         </div>
 
@@ -1419,27 +1643,31 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
               <div className="flex items-center gap-2">
                 <ArrowDownCircle className="w-4 h-4 text-rose-400" />
                 <span className="text-xs font-bold text-rose-300">
-                  {lang === 'fa' ? '🔴 بیشترین خروج پول (فروش سنگین)' : 'Top Capital Exits (Selling)'}
+                  {signalOnly
+                    ? (lang === 'fa' ? '🔴 بیشترین خروج پول / سیگنال‌های نزولی' : '🔴 Top Capital Exits / Bearish Signals')
+                    : (lang === 'fa' ? '🔴 بیشترین خروج پول (فروش سنگین)' : 'Top Capital Exits (Selling)')}
                 </span>
               </div>
-              <span className="text-[10px] text-rose-400/80 font-mono">خالص خروج</span>
+              <span className="text-[10px] text-rose-400/80 font-mono">
+                {signalOnly ? (lang === 'fa' ? 'سیگنال نزولی' : 'Bearish signal') : 'خالص خروج'}
+              </span>
             </div>
 
             <div className="space-y-2.5">
-              {data?.radar?.topOutflows && filterRadarCoins(data.radar.topOutflows).length > 0 ? (
-                filterRadarCoins(data.radar.topOutflows).slice(0, 4).map((coin) => {
-                  const signal = getRadarCoin(coin, 'outflow');
+              {topOutflowCoins.length > 0 ? (
+                topOutflowCoins.slice(0, signalOnly ? topOutflowCoins.length : 4).map((coin) => {
+                  const signal = getRadarCoin(coin);
                   return (
                   <div
                     key={coin.symbol}
                     onClick={() => {
-                      setSelectedSoloCoin(coin.symbol);
-                      openRadarCoin(coin, 'outflow');
+                      setSelectedSoloCoin(normalizeAssetSymbol(coin.symbol));
+                      openRadarCoin(coin);
                     }}
                     className="flex items-center justify-between bg-slate-900/80 hover:bg-slate-850 p-2 rounded-lg border border-rose-900/30 cursor-pointer transition-all hover:border-rose-500/50"
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono font-bold text-sm text-slate-200">{coin.symbol}</span>
+                      <span className="font-mono font-bold text-sm text-slate-200">{normalizeAssetSymbol(coin.symbol)}</span>
                       <span className="text-xs text-slate-400">{coin.nameFa}</span>
                       <SevenExchangeSignalBadge
                         coin={signal}
@@ -1448,15 +1676,40 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                           setSelectedRadarCoin({ coin: selectedCoin, nameFa: selectedName })
                         }
                       />
-                      {renderFlowIntensityBadge(-Math.abs(coin.netFlowToman), coin.volume24hToman)}
+                      {!coin.isWallexFallback && !isActiveRadarSignal(signal) && renderFlowIntensityBadge(
+                        -Math.abs(coin.netFlowToman),
+                        coin.volume24hToman,
+                      )}
                     </div>
                     <div className="text-right">
                       <div className="text-xs font-bold text-rose-400 font-mono">
-                        -{activeViewMode === 'toman' ? formatToman(coin.netFlowToman) : formatUsdt(coin.netFlowToman / (data?.usdtPriceToman || 234600))}
+                        {coin.isWallexFallback
+                          ? (lang === 'fa'
+                            ? 'سیگنال جهانی (بدون معامله اخیر در والکس)'
+                            : 'Global signal (no recent Wallex trades)')
+                          : <span dir="ltr">
+                              {coin.netFlowToman > 0 ? '+' : coin.netFlowToman < 0 ? '-' : ''}
+                              {activeViewMode === 'toman'
+                                ? formatToman(Math.abs(coin.netFlowToman))
+                                : formatUsdt(Math.abs(coin.netFlowToman / (data?.usdtPriceToman || 234600)))}
+                            </span>}
                       </div>
-                      <div className="text-[10px] text-rose-500/80">
-                        {coin.sellPressurePercent?.toFixed(0)}٪ فشار فروش
-                      </div>
+                      {!coin.isWallexFallback && !isActiveRadarSignal(signal) && (
+                        <div className="text-[10px] text-rose-500/80">
+                          <span dir="ltr">{coin.sellPressurePercent?.toFixed(0)}٪</span> فشار فروش
+                        </div>
+                      )}
+                      {!signalOnly &&
+                        !coin.isWallexFallback &&
+                        coin.netFlowToman < 0 &&
+                        isActiveRadarSignal(signal) &&
+                        signal.predictedUsdtPct > 0 && (
+                          <div className="text-[10px] text-amber-300/90">
+                            {lang === 'fa'
+                              ? 'فروش محلی در والکس (واگرا با ورود پول جهانی)'
+                              : 'Local selling on Wallex (divergent from global inflows)'}
+                          </div>
+                        )}
                     </div>
                   </div>
                   );
@@ -1465,7 +1718,9 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                 <div className="text-xs text-slate-400 py-2 text-center">
                   {data?.isFallback
                     ? (lang === 'fa' ? 'داده زنده بازار فعلاً در دسترس نیست.' : 'Live market data is currently unavailable.')
-                    : (lang === 'fa' ? 'داده‌ای برای این فیلتر پیدا نشد.' : 'No market data found for this filter.')}
+                    : signalOnly && activeRadarCoins.length > 0
+                      ? (lang === 'fa' ? 'سیگنال فعالی در جهت خروج وجود ندارد.' : 'No active outflow signal.')
+                      : (lang === 'fa' ? 'داده‌ای برای این فیلتر پیدا نشد.' : 'No market data found for this filter.')}
                 </div>
               )}
             </div>
@@ -1488,27 +1743,31 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
               <div className="flex items-center gap-2">
                 <ArrowUpCircle className="w-4 h-4 text-emerald-400" />
                 <span className="text-xs font-bold text-emerald-300">
-                  {lang === 'fa' ? '🟢 بیشترین ورود پول (خرید قدرتمند)' : 'Top Capital Inflows (Buying)'}
+                  {signalOnly
+                    ? (lang === 'fa' ? '🟢 بیشترین ورود پول / سیگنال‌های صعودی' : '🟢 Top Capital Inflows / Bullish Signals')
+                    : (lang === 'fa' ? '🟢 بیشترین ورود پول (خرید قدرتمند)' : 'Top Capital Inflows (Buying)')}
                 </span>
               </div>
-              <span className="text-[10px] text-emerald-400/80 font-mono">خالص ورود</span>
+              <span className="text-[10px] text-emerald-400/80 font-mono">
+                {signalOnly ? (lang === 'fa' ? 'سیگنال صعودی' : 'Bullish signal') : 'خالص ورود'}
+              </span>
             </div>
 
             <div className="space-y-2.5">
-              {data?.radar?.topInflows && filterRadarCoins(data.radar.topInflows).length > 0 ? (
-                filterRadarCoins(data.radar.topInflows).slice(0, 4).map((coin) => {
-                  const signal = getRadarCoin(coin, 'inflow');
+              {topInflowCoins.length > 0 ? (
+                topInflowCoins.slice(0, signalOnly ? topInflowCoins.length : 4).map((coin) => {
+                  const signal = getRadarCoin(coin);
                   return (
                   <div
                     key={coin.symbol}
                     onClick={() => {
-                      setSelectedSoloCoin(coin.symbol);
-                      openRadarCoin(coin, 'inflow');
+                      setSelectedSoloCoin(normalizeAssetSymbol(coin.symbol));
+                      openRadarCoin(coin);
                     }}
                     className="flex items-center justify-between bg-slate-900/80 hover:bg-slate-850 p-2 rounded-lg border border-emerald-900/30 cursor-pointer transition-all hover:border-emerald-500/50"
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono font-bold text-sm text-slate-200">{coin.symbol}</span>
+                      <span className="font-mono font-bold text-sm text-slate-200">{normalizeAssetSymbol(coin.symbol)}</span>
                       <span className="text-xs text-slate-400">{coin.nameFa}</span>
                       <SevenExchangeSignalBadge
                         coin={signal}
@@ -1517,15 +1776,29 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                           setSelectedRadarCoin({ coin: selectedCoin, nameFa: selectedName })
                         }
                       />
-                      {renderFlowIntensityBadge(Math.abs(coin.netFlowToman), coin.volume24hToman)}
+                      {!coin.isWallexFallback && !isActiveRadarSignal(signal) && renderFlowIntensityBadge(
+                        Math.abs(coin.netFlowToman),
+                        coin.volume24hToman,
+                      )}
                     </div>
                     <div className="text-right">
                       <div className="text-xs font-bold text-emerald-400 font-mono">
-                        +{activeViewMode === 'toman' ? formatToman(coin.netFlowToman) : formatUsdt(coin.netFlowToman / (data?.usdtPriceToman || 234600))}
+                        {coin.isWallexFallback
+                          ? (lang === 'fa'
+                            ? 'سیگنال جهانی (بدون معامله اخیر در والکس)'
+                            : 'Global signal (no recent Wallex trades)')
+                          : <span dir="ltr">
+                              {coin.netFlowToman > 0 ? '+' : coin.netFlowToman < 0 ? '-' : ''}
+                              {activeViewMode === 'toman'
+                                ? formatToman(Math.abs(coin.netFlowToman))
+                                : formatUsdt(Math.abs(coin.netFlowToman / (data?.usdtPriceToman || 234600)))}
+                            </span>}
                       </div>
-                      <div className="text-[10px] text-emerald-500/80">
-                        {coin.buyPressurePercent?.toFixed(0)}٪ برتری خرید
-                      </div>
+                      {!coin.isWallexFallback && !isActiveRadarSignal(signal) && (
+                        <div className="text-[10px] text-emerald-500/80">
+                          <span dir="ltr">{coin.buyPressurePercent?.toFixed(0)}٪</span> برتری خرید
+                        </div>
+                      )}
                     </div>
                   </div>
                   );
@@ -1534,7 +1807,9 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                 <div className="text-xs text-slate-400 py-2 text-center">
                   {data?.isFallback
                     ? (lang === 'fa' ? 'داده زنده بازار فعلاً در دسترس نیست.' : 'Live market data is currently unavailable.')
-                    : (lang === 'fa' ? 'داده‌ای برای این فیلتر پیدا نشد.' : 'No market data found for this filter.')}
+                    : signalOnly && activeRadarCoins.length > 0
+                      ? (lang === 'fa' ? 'سیگنال فعالی در جهت ورود وجود ندارد.' : 'No active inflow signal.')
+                      : (lang === 'fa' ? 'داده‌ای برای این فیلتر پیدا نشد.' : 'No market data found for this filter.')}
                 </div>
               )}
             </div>
@@ -1649,8 +1924,8 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
             >
               <option value="ALL">همه رمزارزها (تجمیعی)</option>
               {topCoinsForFilter.map((c) => (
-                <option key={c.symbol} value={c.symbol}>
-                  {c.symbol} ({c.nameFa})
+                <option key={normalizeAssetSymbol(c.symbol)} value={normalizeAssetSymbol(c.symbol)}>
+                  {normalizeAssetSymbol(c.symbol)} ({c.nameFa})
                 </option>
               ))}
             </select>
@@ -1753,21 +2028,31 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                 className="pl-3 pr-9 py-1.5 text-xs bg-slate-800/90 text-white placeholder-slate-400 border border-slate-700 rounded-xl outline-none focus:border-blue-500 w-52"
               />
             </div>
+            <button
+              type="button"
+              onClick={() => setCoinTableExpanded((expanded) => !expanded)}
+              aria-expanded={coinTableExpanded}
+              className="rounded-xl border border-slate-700 bg-slate-800/90 px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:border-blue-500/60 hover:text-white"
+            >
+              {coinTableExpanded
+                ? (lang === 'fa' ? 'نمای فشرده' : 'Compact view')
+                : (lang === 'fa' ? 'نمایش کامل' : 'Show all')}
+            </button>
           </div>
         </div>
 
         {/* Table Content */}
-        <div className="overflow-x-auto">
+        <div className={`overflow-x-auto ${coinTableExpanded ? '' : 'max-h-[450px] overflow-y-auto'}`}>
           <table className="w-full text-right text-xs">
-            <thead className="bg-slate-800/80 border-b border-slate-700 text-slate-300 font-bold">
+            <thead className="sticky top-0 z-10 bg-[#0b1120] border-b border-slate-700 text-slate-300 font-bold">
               <tr>
-                <th className="py-3 px-3">رمزارز</th>
-                <th className="py-3 px-3">قیمت و تغییرات ۲۴ساعته</th>
-                <th className="py-3 px-3 text-emerald-400 font-extrabold">🟢 کل ورود پول (خرید)</th>
-                <th className="py-3 px-3 text-rose-400 font-extrabold">🔴 کل خروج پول (فروش)</th>
-                <th className="py-3 px-3 text-blue-400 font-extrabold">⚡ جریان خالص (Net Flow)</th>
-                <th className="py-3 px-3">نسبت برتری خریدار / فروشنده</th>
-                <th className="py-3 px-3 text-center">وضعیت سیگنال</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3">رمزارز</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3">قیمت و تغییرات ۲۴ساعته</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3 text-emerald-400 font-extrabold">🟢 کل ورود پول (خرید)</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3 text-rose-400 font-extrabold">🔴 کل خروج پول (فروش)</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3 text-blue-400 font-extrabold">⚡ جریان خالص (Net Flow)</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3">نسبت برتری خریدار / فروشنده</th>
+                <th className="sticky top-0 z-10 bg-[#0b1120] py-3 px-3 text-center">وضعیت سیگنال</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 font-medium">
@@ -1780,14 +2065,14 @@ export default function MoneyFlowSankey({ isDark, lang }: MoneyFlowSankeyProps) 
                   <tr
                     key={coin.symbol}
                     onClick={() => {
-                      setSelectedSoloCoin(coin.symbol);
+                      setSelectedSoloCoin(normalizeAssetSymbol(coin.symbol));
                       openRadarCoin(coin);
                     }}
                     className="hover:bg-slate-800/50 transition-colors cursor-pointer"
                   >
                     <td className="py-3 px-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono font-black text-sm text-white">{coin.symbol}</span>
+                        <span className="font-mono font-black text-sm text-white">{normalizeAssetSymbol(coin.symbol)}</span>
                         <span className="text-slate-400 text-xs">{coin.nameFa}</span>
                         <SevenExchangeSignalBadge
                           coin={radarCoin}

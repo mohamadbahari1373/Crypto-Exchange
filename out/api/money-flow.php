@@ -8,7 +8,7 @@ header('Access-Control-Allow-Headers: Accept, Content-Type');
 
 const WALLEX_MARKETS_URL = 'https://api.wallex.ir/v1/markets';
 const WALLEX_CACHE_TTL = 20;
-const MONEY_FLOW_MAX_COINS = 100;
+const MONEY_FLOW_MAX_COINS = 5000;
 
 function money_flow_json(array $payload, int $status = 200): void
 {
@@ -275,11 +275,15 @@ function money_flow_build_response(array $symbols, string $currency, int $limit,
     usort($allCoins, static function (array $left, array $right): int {
         return $right['totalVolumeToman'] <=> $left['totalVolumeToman'];
     });
+    if ($limit === PHP_INT_MAX) {
+        $limit = count($allCoins);
+    }
 
     $wallexCoins = array_map(
         static function (array $coin) use ($usdtPriceToman): array {
             return [
                 'symbol' => $coin['symbol'],
+                'nameFa' => $coin['nameFa'],
                 'priceChange24h' => money_flow_number($coin['priceChange24h'] ?? 0),
                 'volume24hUsd' => $usdtPriceToman > 0
                     ? $coin['totalVolumeToman'] / $usdtPriceToman
@@ -387,8 +391,13 @@ $currency = strtoupper((string) ($_GET['currency'] ?? 'ALL'));
 if (!in_array($currency, ['ALL', 'TMN', 'USDT'], true)) {
     $currency = 'ALL';
 }
-$limit = filter_var($_GET['limit'] ?? 30, FILTER_VALIDATE_INT);
-$limit = max(1, min(MONEY_FLOW_MAX_COINS, $limit === false ? 30 : $limit));
+$limitParam = strtolower((string) ($_GET['limit'] ?? '30'));
+if ($limitParam === 'all') {
+    $limit = PHP_INT_MAX;
+} else {
+    $parsedLimit = filter_var($limitParam, FILTER_VALIDATE_INT);
+    $limit = max(1, min(MONEY_FLOW_MAX_COINS, $parsedLimit === false ? 30 : $parsedLimit));
+}
 
 $cached = money_flow_read_cache();
 $isFallback = false;

@@ -216,7 +216,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const filterCurrency = searchParams.get('currency') || 'ALL'; // 'ALL', 'TMN', 'USDT'
   const limitParam = searchParams.get('limit') || '50';
-  const maxCoins = limitParam === 'all' ? 100 : parseInt(limitParam, 10) || 50;
+  const maxCoins = limitParam === 'all' ? Number.MAX_SAFE_INTEGER : parseInt(limitParam, 10) || 50;
 
   if (flowCache && Date.now() - flowCache.timestamp < CACHE_TTL_MS) {
     return NextResponse.json(filterData(flowCache.data, filterCurrency, maxCoins));

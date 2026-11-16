@@ -2,7 +2,10 @@ const CACHE_TTL_MS = 60_000;
 const SUPPLY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const SUPPLY_CACHE_KEY = 'seven-exchange-radar-supply-v1';
 const REQUEST_TIMEOUT_MS = 8_000;
-const KLINE_BATCH_SIZE = 5;
+const PROXY_TIMEOUT_MS = 90_000;
+const KLINE_BATCH_SIZE = 8;
+const KLINE_BATCH_DELAY_MS = 120;
+const REFERENCE_EXCHANGES = ['Binance', 'OKX', 'Bybit', 'Coinbase', 'Kraken', 'Upbit'] as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -11,27 +14,38 @@ interface MarketData {
   changePct: number;
 }
 
+interface CandlePair {
+  pair: string;
+  quoteToUsd: number;
+}
+
+interface MarketCandle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  closeUsd: number;
+  quoteVolumeUsd: number;
+  takerBuyQuoteVolumeUsd?: number;
+}
+
 interface SupplyData {
   circulatingSupply: number;
   marketCap: number;
-}
-
-interface MarketFallbackContext {
-  averageChangePct: number;
-  changeStdDevPct: number;
-  averageVolumeToMarketCap: number;
 }
 
 interface ExchangeSnapshot {
   name: string;
   symbols: Set<string>;
   markets: Map<string, MarketData>;
-  binanceSymbols?: Map<string, string>;
+  candlePairs?: Map<string, CandlePair>;
   pairs?: Map<string, string>;
 }
 
 export interface WallexRadarCoin {
   symbol: string;
+  nameFa?: string;
   priceChange24h: number;
   volume24hUsd: number;
 }
@@ -54,9 +68,11 @@ export interface SevenExchangeRadarCoin {
   timeframe: string | null;
   confidence: number;
   alignedExchanges: number;
-  flowEstimateAvailable: boolean;
+  candleDataAvailable: boolean;
+  flowDataAvailable: boolean;
   hasSignal: boolean;
   isWallexFallback?: boolean;
+  referenceListingStatus?: 'listed' | 'unlisted' | 'unknown';
   buyVolumeToman?: number;
   sellVolumeToman?: number;
   lastPriceToman?: number;
@@ -68,11 +84,11 @@ export interface WallexRadarFallbackInput {
   symbol: string;
   buyVolumeToman: number;
   sellVolumeToman: number;
-  netFlowToman: number;
   lastPriceToman: number;
   priceChange24h: number;
   usdtPriceToman: number;
   usdtTmnMomentumPct: number;
+  referenceListingStatus?: 'unlisted' | 'unknown';
 }
 
 export interface SevenExchangeRadarResponse {
@@ -103,11 +119,11 @@ function asNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function normalizeSevenExchangeSymbol(value: unknown): string {
+export function normalizeAssetSymbol(value: unknown): string {
   let symbol = String(value ?? '').trim().toUpperCase();
   symbol = symbol
-    .replace(/[-_/](USDT|TMN|IRT|USD)$/, '')
-    .replace(/(USDT|TMN|IRT)$/, '')
+    .replace(/[-_/](USDT|USDC|USD|KRW|TMN|IRT)$/, '')
+    .replace(/(USDT|USDC|USD|KRW|TMN|IRT)$/, '')
     .replace(/^1000(?=[A-Z0-9])/, '');
   if (symbol === 'XBT' || symbol === 'XXBT') return 'BTC';
   if (symbol === 'XDG') return 'DOGE';
@@ -123,11 +139,6 @@ export function createWallexRadarFallbackCoin(
   const usdtPriceToman = nonNegative(input.usdtPriceToman);
   const buyVolumeToman = nonNegative(input.buyVolumeToman);
   const sellVolumeToman = nonNegative(input.sellVolumeToman);
-  const netFlowToman = Number.isFinite(input.netFlowToman)
-    ? input.netFlowToman
-    : buyVolumeToman - sellVolumeToman;
-  const netFlowUsd24h = usdtPriceToman > 0 ? netFlowToman / usdtPriceToman : 0;
-  const hourlyFlowUsd = netFlowUsd24h / 24;
   const usdtTmnMomentumPct = Number.isFinite(input.usdtTmnMomentumPct)
     ? input.usdtTmnMomentumPct
     : 0;
@@ -135,15 +146,15 @@ export function createWallexRadarFallbackCoin(
   const lastPriceToman = nonNegative(input.lastPriceToman);
 
   return {
-    symbol: normalizeSevenExchangeSymbol(input.symbol),
+    symbol: normalizeAssetSymbol(input.symbol),
     circulatingSupply: 0,
     marketCap: 0,
     priceUsd: usdtPriceToman > 0 ? lastPriceToman / usdtPriceToman : 0,
     exchangeVolumeUsd: usdtPriceToman > 0
       ? (buyVolumeToman + sellVolumeToman) / usdtPriceToman
       : 0,
-    netFlow1h: hourlyFlowUsd,
-    globalNetFlow1h: hourlyFlowUsd,
+    netFlow1h: 0,
+    globalNetFlow1h: 0,
     zScore: 0,
     zScoreLatest: 0,
     zScoreLast2h: 0,
@@ -154,9 +165,11 @@ export function createWallexRadarFallbackCoin(
     timeframe: null,
     confidence: 55,
     alignedExchanges: 0,
-    flowEstimateAvailable: buyVolumeToman + sellVolumeToman > 0,
+    candleDataAvailable: false,
+    flowDataAvailable: false,
     hasSignal: false,
     isWallexFallback: true,
+    referenceListingStatus: input.referenceListingStatus ?? 'unknown',
     buyVolumeToman,
     sellVolumeToman,
     lastPriceToman,
@@ -165,11 +178,16 @@ export function createWallexRadarFallbackCoin(
   };
 }
 
-async function fetchJson(url: string): Promise<unknown> {
+async function fetchJson(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<unknown> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
+      ...init,
       signal: controller.signal,
       cache: 'no-store',
     });
@@ -192,36 +210,39 @@ function rowsFrom(value: unknown, ...keys: string[]): unknown[] {
 function uniqueMarketMap(entries: Iterable<[string, MarketData]>): Map<string, MarketData> {
   const result = new Map<string, MarketData>();
   for (const [rawSymbol, market] of entries) {
-    const symbol = normalizeSevenExchangeSymbol(rawSymbol);
-    if (symbol && !['USDT', 'USD', 'TMN', 'IRT'].includes(symbol)) result.set(symbol, market);
+    const symbol = normalizeAssetSymbol(rawSymbol);
+    if (symbol && !['USDT', 'USDC', 'USD', 'TMN', 'IRT', 'KRW'].includes(symbol)) {
+      result.set(symbol, market);
+    }
   }
   return result;
 }
 
 function parseBinance(payload: unknown): ExchangeSnapshot | null {
   const entries: Array<[string, MarketData]> = [];
-  const binanceSymbols = new Map<string, string>();
+  const candlePairs = new Map<string, CandlePair>();
   for (const item of asArray(payload)) {
     if (!isRecord(item)) continue;
     const symbol = String(item.symbol ?? '').toUpperCase();
-    if (!symbol.endsWith('USDT')) continue;
-    const rawBase = symbol.slice(0, -4);
-    const base = normalizeSevenExchangeSymbol(rawBase);
+    const quote = ['USDT', 'USDC', 'USD'].find((suffix) => symbol.endsWith(suffix));
+    if (!quote) continue;
+    const rawBase = symbol.slice(0, -quote.length);
+    const base = normalizeAssetSymbol(rawBase);
     entries.push([base, {
       volumeUsd: asNumber(item.quoteVolume),
       changePct: asNumber(item.priceChangePercent),
     }]);
-    binanceSymbols.set(base, rawBase);
+    candlePairs.set(base, { pair: symbol, quoteToUsd: 1 });
   }
   const markets = uniqueMarketMap(entries);
   return markets.size > 0
-    ? { name: 'Binance', symbols: new Set(markets.keys()), markets, binanceSymbols }
+    ? { name: 'Binance', symbols: new Set(markets.keys()), markets, candlePairs }
     : null;
 }
 
 function createWallexSnapshot(coins: WallexRadarCoin[]): ExchangeSnapshot {
   const entries = coins.flatMap((coin): Array<[string, MarketData]> => {
-    const symbol = normalizeSevenExchangeSymbol(coin.symbol);
+    const symbol = normalizeAssetSymbol(coin.symbol);
     if (!symbol) return [];
     return [[symbol, {
       volumeUsd: Math.max(0, asNumber(coin.volume24hUsd)),
@@ -238,42 +259,96 @@ function createWallexSnapshot(coins: WallexRadarCoin[]): ExchangeSnapshot {
 
 function parseOkx(payload: unknown): ExchangeSnapshot | null {
   const entries: Array<[string, MarketData]> = [];
+  const candlePairs = new Map<string, CandlePair>();
   for (const item of rowsFrom(payload, 'data')) {
     if (!isRecord(item)) continue;
     const instrument = String(item.instId ?? '').toUpperCase();
-    if (!instrument.endsWith('-USDT')) continue;
+    const quote = ['-USDT', '-USDC', '-USD'].find((suffix) => instrument.endsWith(suffix));
+    if (!quote) continue;
     const last = asNumber(item.last);
     const open = asNumber(item.open24h);
-    entries.push([instrument.slice(0, -5), {
+    const base = instrument.slice(0, -quote.length);
+    entries.push([base, {
       volumeUsd: asNumber(item.volCcy24h) * last,
       changePct: open > 0 ? ((last / open) - 1) * 100 : 0,
     }]);
+    candlePairs.set(normalizeAssetSymbol(base), {
+      pair: instrument,
+      quoteToUsd: 1,
+    });
   }
   const markets = uniqueMarketMap(entries);
-  return markets.size > 0 ? { name: 'OKX', symbols: new Set(markets.keys()), markets } : null;
+  return markets.size > 0
+    ? { name: 'OKX', symbols: new Set(markets.keys()), markets, candlePairs }
+    : null;
 }
 
 function parseKraken(payload: unknown): ExchangeSnapshot | null {
   const result = isRecord(payload) && isRecord(payload.result) ? payload.result : {};
   const pairs = new Map<string, string>();
+  const candlePairs = new Map<string, CandlePair>();
   for (const [key, value] of Object.entries(result)) {
     if (!isRecord(value)) continue;
     const [baseRaw, quoteRaw] = String(value.wsname ?? '').split('/');
     const quote = String(quoteRaw ?? '').toUpperCase();
-    if ((quote !== 'USD' && quote !== 'USDT') || !baseRaw) continue;
-    const base = normalizeSevenExchangeSymbol(baseRaw);
-    if (base) pairs.set(base, key);
+    if (!['USD', 'USDT', 'USDC'].includes(quote) || !baseRaw) continue;
+    const base = normalizeAssetSymbol(baseRaw);
+    if (base) {
+      pairs.set(base, key);
+      candlePairs.set(base, { pair: String(value.altname ?? key), quoteToUsd: 1 });
+    }
   }
   return pairs.size > 0
-    ? { name: 'Kraken', symbols: new Set(pairs.keys()), markets: new Map(), pairs }
+    ? { name: 'Kraken', symbols: new Set(pairs.keys()), markets: new Map(), pairs, candlePairs }
     : null;
+}
+
+function parseProxyMarkets(payload: unknown): ExchangeSnapshot[] {
+  if (!isRecord(payload) || !Array.isArray(payload.exchanges)) {
+    throw new Error('Invalid radar proxy response: exchanges are missing');
+  }
+
+  const snapshots = payload.exchanges.flatMap((entry): ExchangeSnapshot[] => {
+    if (!isRecord(entry) || typeof entry.name !== 'string' || !Array.isArray(entry.markets)) return [];
+    if (!(REFERENCE_EXCHANGES as readonly string[]).includes(entry.name)) return [];
+
+    const entries: Array<[string, MarketData]> = [];
+    const candlePairs = new Map<string, CandlePair>();
+    for (const market of entry.markets) {
+      if (!isRecord(market) || typeof market.symbol !== 'string' || typeof market.pair !== 'string') continue;
+      const symbol = normalizeAssetSymbol(market.symbol);
+      if (!symbol) continue;
+      entries.push([symbol, {
+        volumeUsd: Math.max(0, asNumber(market.volumeUsd)),
+        changePct: asNumber(market.changePct),
+      }]);
+      candlePairs.set(symbol, {
+        pair: market.pair,
+        quoteToUsd: Math.max(0, asNumber(market.quoteToUsd ?? 1)),
+      });
+    }
+    const markets = uniqueMarketMap(entries);
+    return markets.size > 0
+      ? [{
+          name: entry.name,
+          symbols: new Set(markets.keys()),
+          markets,
+          candlePairs,
+        }]
+      : [];
+  });
+
+  if (snapshots.length === 0) {
+    throw new Error('Radar proxy returned no usable exchange markets');
+  }
+  return snapshots;
 }
 
 function parseSupply(payload: unknown, gecko = false): Map<string, SupplyData> {
   const supplies = new Map<string, SupplyData>();
   for (const item of asArray(payload)) {
     if (!isRecord(item)) continue;
-    const symbol = normalizeSevenExchangeSymbol(item.symbol);
+    const symbol = normalizeAssetSymbol(item.symbol);
     const quotes = isRecord(item.quotes) ? item.quotes : {};
     const usd = isRecord(quotes.USD) ? quotes.USD : {};
     const circulatingSupply = asNumber(item.circulating_supply);
@@ -315,7 +390,7 @@ function readSupplyCache(): Map<string, SupplyData> | null {
     const supplies = new Map<string, SupplyData>();
     for (const entry of cached.supplies) {
       if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
-      const symbol = normalizeSevenExchangeSymbol(entry[0]);
+      const symbol = normalizeAssetSymbol(entry[0]);
       const circulatingSupply = asNumber(entry[1]);
       const marketCap = asNumber(entry[2]);
       if (symbol && circulatingSupply > 0) {
@@ -398,23 +473,6 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-function estimateHourlyFlow(
-  symbol: string,
-  snapshots: ExchangeSnapshot[],
-): { value: number; available: boolean } {
-  const estimatingSources = new Set(['Binance', 'Bybit', 'OKX', 'Wallex']);
-  let value = 0;
-  let available = false;
-  for (const snapshot of snapshots) {
-    if (!estimatingSources.has(snapshot.name)) continue;
-    const market = snapshot.markets.get(symbol);
-    if (!market || market.volumeUsd <= 0 || market.changePct === 0) continue;
-    value += (market.volumeUsd * market.changePct) / 100 / 24;
-    available = true;
-  }
-  return { value, available };
-}
-
 async function getKrakenMarkets(
   pairs: Map<string, string>,
   symbols: string[],
@@ -445,67 +503,174 @@ async function getKrakenMarkets(
   return markets;
 }
 
-async function getKlines(symbol: string, binanceSymbol = symbol): Promise<unknown[]> {
-  return asArray(await fetchJson(
-    `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(`${binanceSymbol}USDT`)}&interval=1h&limit=24`,
-  ));
+function parseCandleRows(
+  payload: unknown,
+  exchange: string,
+  quoteToUsd: number,
+): MarketCandle[] {
+  const rows: MarketCandle[] = [];
+  const addCandle = (
+    time: unknown,
+    open: unknown,
+    high: unknown,
+    low: unknown,
+    close: unknown,
+    quoteVolume: unknown,
+    takerBuyQuoteVolume?: unknown,
+    timeMultiplier = 1,
+  ) => {
+    const parsedClose = asNumber(close);
+    if (parsedClose <= 0) return;
+    const parsedBuyVolume = takerBuyQuoteVolume === undefined || takerBuyQuoteVolume === null
+      ? undefined
+      : asNumber(takerBuyQuoteVolume) * quoteToUsd;
+    rows.push({
+      time: asNumber(time) * timeMultiplier,
+      open: asNumber(open),
+      high: asNumber(high),
+      low: asNumber(low),
+      close: parsedClose,
+      closeUsd: quoteToUsd > 0 ? parsedClose * quoteToUsd : 0,
+      quoteVolumeUsd: asNumber(quoteVolume) * quoteToUsd,
+      ...(parsedBuyVolume === undefined ? {} : { takerBuyQuoteVolumeUsd: parsedBuyVolume }),
+    });
+  };
+
+  const normalizedRows = isRecord(payload) && Array.isArray(payload.rows)
+    ? payload.rows
+    : null;
+  if (normalizedRows) {
+    for (const row of normalizedRows) {
+      if (!isRecord(row)) continue;
+      addCandle(
+        row.time,
+        row.open,
+        row.high,
+        row.low,
+        row.close,
+        row.quoteVolume,
+        row.takerBuyQuoteVolume,
+      );
+    }
+  } else if (exchange === 'Binance') {
+    for (const row of asArray(payload)) {
+      if (!Array.isArray(row) || row.length < 11) continue;
+      addCandle(row[0], row[1], row[2], row[3], row[4], row[7], row[10]);
+    }
+  } else if (exchange === 'OKX') {
+    for (const row of rowsFrom(payload, 'data')) {
+      if (!Array.isArray(row) || row.length < 8) continue;
+      addCandle(row[0], row[1], row[2], row[3], row[4], row[7]);
+    }
+  } else if (exchange === 'Bybit') {
+    for (const row of rowsFrom(payload, 'result', 'list')) {
+      if (!Array.isArray(row) || row.length < 7) continue;
+      addCandle(row[0], row[1], row[2], row[3], row[4], row[6]);
+    }
+  } else if (exchange === 'Coinbase') {
+    for (const row of asArray(payload)) {
+      if (!Array.isArray(row) || row.length < 6) continue;
+      addCandle(row[0], row[3], row[2], row[1], row[4], asNumber(row[5]) * asNumber(row[4]), undefined, 1_000);
+    }
+  } else if (exchange === 'Kraken') {
+    const result = isRecord(payload) && isRecord(payload.result) ? payload.result : {};
+    for (const [pair, candles] of Object.entries(result)) {
+      if (pair === 'last') continue;
+      for (const row of asArray(candles)) {
+        if (!Array.isArray(row) || row.length < 8) continue;
+        addCandle(row[0], row[1], row[2], row[3], row[4], asNumber(row[6]) * asNumber(row[4]), undefined, 1_000);
+      }
+    }
+  } else if (exchange === 'Upbit') {
+    for (const row of asArray(payload)) {
+      if (!isRecord(row)) continue;
+      addCandle(
+        row.timestamp,
+        row.opening_price,
+        row.high_price,
+        row.low_price,
+        row.trade_price,
+        row.candle_acc_trade_price,
+      );
+    }
+  }
+
+  return rows.sort((left, right) => left.time - right.time).slice(-24);
+}
+
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function getDirectCandleBatch(
+  symbols: string[],
+): Promise<Map<string, MarketCandle[]>> {
+  const results = await Promise.allSettled(symbols.map(async (symbol) => ({
+    symbol,
+    candles: parseCandleRows(
+      await fetchJson(
+        `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(`${symbol}USDT`)}&interval=1h&limit=24`,
+      ),
+      'Binance',
+      1,
+    ),
+  })));
+  const candles = new Map<string, MarketCandle[]>();
+  for (const result of results) {
+    if (result.status === 'fulfilled') candles.set(result.value.symbol, result.value.candles);
+    else console.warn('Unable to load Binance radar candles:', result.reason);
+  }
+  return candles;
 }
 
 function createCoinSignal(
   symbol: string,
-  rows: unknown[],
+  candles: MarketCandle[],
   exchangeMarkets: MarketData[],
   supply: SupplyData,
   usdtMomentumPct: number,
-  totalUniverseVolume: number,
-  estimatedFlow: { value: number; available: boolean },
-  marketContext: MarketFallbackContext,
 ): SevenExchangeRadarCoin {
-  const candles = rows.filter((row): row is unknown[] => Array.isArray(row) && row.length > 10);
-  const flows = candles.map((row) => (2 * asNumber(row[10])) - asNumber(row[7]));
-  const candleFlow = flows.at(-1) ?? 0;
-  const latestFlow = candleFlow !== 0 ? candleFlow : estimatedFlow.value;
-  const mean = flows.length ? flows.reduce((sum, value) => sum + value, 0) / flows.length : 0;
-  const variance = flows.length
-    ? flows.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / flows.length
+  const hourlyReturns: number[] = [];
+  for (let index = 1; index < candles.length; index += 1) {
+    const close = candles[index].close;
+    const previousClose = candles[index - 1].close;
+    if (close > 0 && previousClose > 0) {
+      hourlyReturns.push(((close / previousClose) - 1) * 100);
+    }
+  }
+  const returnsMean = average(hourlyReturns);
+  const returnsStdDev = standardDeviation(hourlyReturns, returnsMean);
+  const recentReturns = hourlyReturns.slice(-2);
+  const recentReturnMean = average(recentReturns);
+  const zScoreLatest = returnsStdDev > 0 && hourlyReturns.length
+    ? (hourlyReturns[hourlyReturns.length - 1] - returnsMean) / returnsStdDev
     : 0;
-  const standardDeviation = Math.sqrt(variance);
-  const recentFlows = flows.slice(-2);
-  const recentMean = recentFlows.length
-    ? recentFlows.reduce((sum, value) => sum + value, 0) / recentFlows.length
+  const zScore = returnsStdDev > 0 && recentReturns.length
+    ? (recentReturnMean - returnsMean) / returnsStdDev
     : 0;
-  const zScoreLatest = standardDeviation > 0 && flows.length
-    ? (flows[flows.length - 1] - mean) / standardDeviation
-    : 0;
-  const zScoreLast2h = standardDeviation > 0 && recentFlows.length
-    ? (recentMean - mean) / standardDeviation
-    : 0;
-  const hasCandleFlowBaseline = flows.length >= 2 && standardDeviation > 0;
-  const currentPrice = asNumber(candles.at(-1)?.[4]);
+  const candleDataAvailable = candles.length === 24 && hourlyReturns.length === 23;
+  const currentPrice = candles.at(-1)?.closeUsd ?? 0;
   const marketCap = supply.circulatingSupply > 0 && currentPrice > 0
     ? supply.circulatingSupply * currentPrice
     : supply.marketCap;
   const exchangeVolumeUsd = exchangeMarkets.reduce((sum, market) => sum + market.volumeUsd, 0);
-  const observedMarkets = exchangeMarkets.filter((market) => market.volumeUsd > 0);
-  const coinChangePct = observedMarkets.length
-    ? observedMarkets.reduce((sum, market) => sum + market.changePct, 0) / observedMarkets.length
+  const effectiveZScore = candleDataAvailable ? zScore : 0;
+  const effectiveLatestZScore = candleDataAvailable ? zScoreLatest : 0;
+  const latestCandle = candles.at(-1);
+  const takerBuyQuoteVolumeUsd = latestCandle?.takerBuyQuoteVolumeUsd;
+  const flowDataAvailable = typeof takerBuyQuoteVolumeUsd === 'number' &&
+    Number.isFinite(takerBuyQuoteVolumeUsd);
+  const candleFlow = flowDataAvailable && latestCandle
+    ? (2 * takerBuyQuoteVolumeUsd) - latestCandle.quoteVolumeUsd
     : 0;
-  const relativeChangePct = coinChangePct - marketContext.averageChangePct;
-  const volumeToMarketCap = marketCap > 0 ? exchangeVolumeUsd / marketCap : 0;
-  const volumeActivityFactor = volumeToMarketCap > 0 && marketContext.averageVolumeToMarketCap > 0
-    ? Math.max(0.5, Math.min(2, Math.sqrt(volumeToMarketCap / marketContext.averageVolumeToMarketCap)))
-    : 1;
-  const changeScale = marketContext.changeStdDevPct > 0
-    ? marketContext.changeStdDevPct
-    : Math.max(Math.abs(marketContext.averageChangePct), 0.25);
-  const fallbackZScore = (relativeChangePct / changeScale) * volumeActivityFactor;
-  const zScore = hasCandleFlowBaseline ? zScoreLast2h : fallbackZScore;
-  const effectiveLatestZScore = hasCandleFlowBaseline ? zScoreLatest : fallbackZScore;
   const ratios: number[] = [];
   for (let index = 1; index < candles.length; index += 1) {
-    const close = asNumber(candles[index][4]);
-    const previousClose = asNumber(candles[index - 1][4]);
-    const flow = Math.abs(flows[index]);
+    const close = candles[index].close;
+    const previousClose = candles[index - 1].close;
+    const takerBuyVolume = candles[index].takerBuyQuoteVolumeUsd;
+    const flow = typeof takerBuyVolume === 'number' && Number.isFinite(takerBuyVolume)
+      ? Math.abs((2 * takerBuyVolume) - candles[index].quoteVolumeUsd)
+      : 0;
     if (close <= 0 || previousClose <= 0 || flow <= 0 || marketCap <= 0) continue;
     const hourlyChangePct = ((close / previousClose) - 1) * 100;
     const normalizedFlowPct = (flow / marketCap) * 100;
@@ -516,34 +681,24 @@ function createCoinSignal(
   }
 
   const candleBeta = median(ratios);
-  const volumeWeightedFlow = candleFlow !== 0 && totalUniverseVolume > 0
-    ? candleFlow * (exchangeVolumeUsd / totalUniverseVolume)
-    : 0;
-  const globalNetFlow1h = volumeWeightedFlow !== 0
-    ? volumeWeightedFlow
-    : estimatedFlow.available
-      ? estimatedFlow.value
-      : candleFlow;
-  const fallbackPredictedUsdtPct = (relativeChangePct / 24) * volumeActivityFactor;
-  const beta = candleBeta > 0
-    ? candleBeta
-    : globalNetFlow1h !== 0
-      ? Math.abs(fallbackPredictedUsdtPct / globalNetFlow1h)
-      : 0;
-  const predictedUsdtPct = hasCandleFlowBaseline && candleBeta > 0
+  const globalNetFlow1h = flowDataAvailable ? candleFlow : 0;
+  const beta = candleBeta;
+  const predictedUsdtPct = flowDataAvailable && candleBeta > 0
     ? candleBeta * globalNetFlow1h
-    : fallbackPredictedUsdtPct;
+    : candleDataAvailable ? recentReturnMean : 0;
   const predictedTmnPct = (((1 + predictedUsdtPct / 100) * (1 + usdtMomentumPct / 100)) - 1) * 100;
   const alignedExchanges = exchangeMarkets.filter((market) =>
-    zScore !== 0 && market.changePct !== 0 && Math.sign(market.changePct) === Math.sign(zScore),
+    effectiveZScore !== 0 &&
+      market.changePct !== 0 &&
+      Math.sign(market.changePct) === Math.sign(effectiveZScore),
   ).length;
   const confidence = Math.min(95, Math.max(55,
     55 + (alignedExchanges / Math.max(exchangeMarkets.length, 1)) * 25 +
-      (Math.min(Math.abs(zScore), 3) / 3) * 15,
+      (Math.min(Math.abs(effectiveZScore), 3) / 3) * 15,
   ));
-  const timeframe = Math.abs(zScore) >= 2
+  const timeframe = Math.abs(effectiveZScore) >= 2 && Math.abs(predictedUsdtPct) >= 1
     ? 'فوری (۱۵ تا ۶۰ دقیقه)'
-    : Math.abs(zScore) >= 1.15
+    : Math.abs(effectiveZScore) >= 1.5
       ? 'کوتاه‌مدت (۱ تا ۴ ساعت)'
       : null;
   return {
@@ -552,11 +707,11 @@ function createCoinSignal(
     marketCap,
     priceUsd: currentPrice,
     exchangeVolumeUsd,
-    netFlow1h: latestFlow,
+    netFlow1h: globalNetFlow1h,
     globalNetFlow1h,
-    zScore,
+    zScore: effectiveZScore,
     zScoreLatest: effectiveLatestZScore,
-    zScoreLast2h: zScore,
+    zScoreLast2h: effectiveZScore,
     beta,
     predictedUsdtPct,
     predictedTmnPct,
@@ -564,12 +719,14 @@ function createCoinSignal(
     timeframe,
     confidence,
     alignedExchanges,
-    flowEstimateAvailable: candleFlow !== 0 || estimatedFlow.available,
+    candleDataAvailable,
+    flowDataAvailable,
     hasSignal:
-      timeframe !== null &&
-      Math.abs(globalNetFlow1h) >= 5_000 &&
-      Math.abs(predictedUsdtPct) >= 0.15 &&
-      Math.sign(zScore) === Math.sign(predictedUsdtPct),
+      flowDataAvailable &&
+      Math.abs(effectiveZScore) >= 1.5 &&
+      Math.abs(predictedUsdtPct) >= 1.0 &&
+      Math.abs(globalNetFlow1h) >= 25_000 &&
+      Math.sign(effectiveZScore) === Math.sign(predictedUsdtPct),
   };
 }
 
@@ -578,34 +735,40 @@ async function buildRadar(
   usdtTmnRate: number,
   usdtTmnChangePct: number,
 ): Promise<SevenExchangeRadarResponse> {
-  const results = await Promise.allSettled([
-    fetchJson('https://data-api.binance.vision/api/v3/ticker/24hr'),
-    fetchJson('https://www.okx.com/api/v5/market/tickers?instType=SPOT'),
-    fetchJson('https://api.kraken.com/0/public/AssetPairs'),
-    fetchSupplyData(),
-  ]);
-  const externalParsers: Array<(payload: unknown) => ExchangeSnapshot | null> = [
-    parseBinance,
-    parseOkx,
-    parseKraken,
-  ];
-  const externalSnapshots = results.slice(0, 3).flatMap((result, index) => {
-    if (result.status !== 'fulfilled') return [];
-    const snapshot = externalParsers[index](result.value);
-    return snapshot ? [snapshot] : [];
-  });
   const wallexSnapshot = createWallexSnapshot(wallexCoins);
-  const snapshots = [wallexSnapshot, ...externalSnapshots];
-  const supplies = results[3].status === 'fulfilled'
-    ? results[3].value
-    : new Map<string, SupplyData>();
-  const common = externalSnapshots.length > 0
-    ? [...wallexSnapshot.symbols].filter((symbol) =>
-      externalSnapshots.every((snapshot) => snapshot.symbols.has(symbol)),
-    )
-    : [];
+  const suppliesPromise = fetchSupplyData();
+  let externalSnapshots: ExchangeSnapshot[];
+
+  try {
+    const proxyPayload = await fetchJson('/radar-proxy.php?action=markets', {}, PROXY_TIMEOUT_MS);
+    const proxySnapshots = parseProxyMarkets(proxyPayload);
+    if (proxySnapshots.length < 2) {
+      throw new Error(`Radar proxy returned data for only ${proxySnapshots.length} exchanges`);
+    }
+    externalSnapshots = proxySnapshots;
+  } catch (error) {
+    console.warn('Radar PHP proxy is unavailable or returned insufficient data; using direct APIs.', error);
+    const directResults = await Promise.allSettled([
+      fetchJson('https://data-api.binance.vision/api/v3/ticker/24hr'),
+      fetchJson('https://www.okx.com/api/v5/market/tickers?instType=SPOT'),
+      fetchJson('https://api.kraken.com/0/public/AssetPairs'),
+    ]);
+    const parsers = [parseBinance, parseOkx, parseKraken];
+    externalSnapshots = directResults.flatMap((result, index) => {
+      if (result.status !== 'fulfilled') {
+        console.warn(`Unable to load ${['Binance', 'OKX', 'Kraken'][index]} markets:`, result.reason);
+        return [];
+      }
+      const snapshot = parsers[index](result.value);
+      return snapshot ? [snapshot] : [];
+    });
+  }
+
+  const common = [...wallexSnapshot.symbols].filter((symbol) =>
+    externalSnapshots.some((snapshot) => snapshot.symbols.has(symbol)),
+  );
   const krakenSnapshot = externalSnapshots.find((snapshot) => snapshot.name === 'Kraken');
-  if (krakenSnapshot?.pairs) {
+  if (krakenSnapshot?.pairs && krakenSnapshot.markets.size === 0) {
     try {
       krakenSnapshot.markets = await getKrakenMarkets(krakenSnapshot.pairs, common);
     } catch (error) {
@@ -613,83 +776,53 @@ async function buildRadar(
     }
   }
 
-  const foreignSnapshots = snapshots.filter((snapshot) => snapshot.name !== 'Wallex');
-  const binanceSnapshot = externalSnapshots.find((snapshot) => snapshot.name === 'Binance');
-  const marketChanges = common.flatMap((symbol) => {
-    const changes = foreignSnapshots
-      .map((snapshot) => snapshot.markets.get(symbol))
-      .filter((market): market is MarketData => Boolean(market && market.volumeUsd > 0))
-      .map((market) => market.changePct);
-    return changes.length > 0 ? [average(changes)] : [];
-  });
-  const volumeToMarketCapValues = common.map((symbol) => {
-    const marketCap = supplies.get(symbol)?.marketCap ?? 0;
-    if (marketCap <= 0) return 0;
-    const totalVolume = foreignSnapshots.reduce(
-      (sum, snapshot) => sum + (snapshot.markets.get(symbol)?.volumeUsd ?? 0),
-      0,
-    );
-    return totalVolume / marketCap;
-  }).filter((ratio) => ratio > 0);
-  const averageMarketChangePct = average(marketChanges);
-  const marketContext: MarketFallbackContext = {
-    averageChangePct: averageMarketChangePct,
-    changeStdDevPct: standardDeviation(marketChanges, averageMarketChangePct),
-    averageVolumeToMarketCap: average(volumeToMarketCapValues),
-  };
-  const totalUniverseVolume = common.reduce((sum, symbol) =>
-    sum + foreignSnapshots.reduce((coinSum, snapshot) =>
-      coinSum + (snapshot.markets.get(symbol)?.volumeUsd ?? 0), 0),
-  0);
-  const klinesBySymbol = new Map<string, unknown[]>();
-  const candleSymbols = binanceSnapshot
-    ? [...common]
-        .filter((symbol) => binanceSnapshot.symbols.has(symbol))
-        .sort((left, right) =>
-          (binanceSnapshot.markets.get(right)?.volumeUsd ?? 0) -
-          (binanceSnapshot.markets.get(left)?.volumeUsd ?? 0),
-        )
-        .slice(0, 25)
-    : [];
-  for (let start = 0; start < candleSymbols.length; start += KLINE_BATCH_SIZE) {
-    const batch = candleSymbols.slice(start, start + KLINE_BATCH_SIZE);
-    const results = await Promise.allSettled(batch.map(async (symbol) => ({
-      symbol,
-      rows: await getKlines(symbol, binanceSnapshot?.binanceSymbols?.get(symbol) ?? symbol),
-    })));
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        klinesBySymbol.set(result.value.symbol, result.value.rows);
-      }
+  const foreignSnapshots = externalSnapshots;
+  const candlesBySymbol = new Map<string, MarketCandle[]>();
+  for (let start = 0; start < common.length; start += KLINE_BATCH_SIZE) {
+    const batch = common.slice(start, start + KLINE_BATCH_SIZE);
+    try {
+      const candles = await getDirectCandleBatch(batch);
+      for (const [symbol, rows] of candles) candlesBySymbol.set(symbol, rows);
+    } catch (error) {
+      console.warn('Unable to load a radar candle batch:', error);
+    }
+    if (start + KLINE_BATCH_SIZE < common.length) {
+      await pause(KLINE_BATCH_DELAY_MS);
     }
   }
+
+  const supplies = await suppliesPromise;
   const coins = common.map((symbol) => {
-    const exchangeMarkets = foreignSnapshots.map((snapshot) =>
-      snapshot.markets.get(symbol) ?? { volumeUsd: 0, changePct: 0 },
-    );
+    const exchangeMarkets = foreignSnapshots.flatMap((snapshot) => {
+      const market = snapshot.markets.get(symbol);
+      return market ? [market] : [];
+    });
     return createCoinSignal(
       symbol,
-      klinesBySymbol.get(symbol) ?? [],
+      candlesBySymbol.get(symbol) ?? [],
       exchangeMarkets,
       supplies.get(symbol) ?? { circulatingSupply: 0, marketCap: 0 },
       usdtTmnChangePct,
-      totalUniverseVolume,
-      estimateHourlyFlow(symbol, snapshots),
-      marketContext,
     );
   });
   const exchangeStatus: Record<string, boolean> = {
     Wallex: wallexSnapshot.symbols.size > 0,
-    Binance: externalSnapshots.some((snapshot) => snapshot.name === 'Binance'),
-    OKX: externalSnapshots.some((snapshot) => snapshot.name === 'OKX'),
-    Kraken: externalSnapshots.some((snapshot) => snapshot.name === 'Kraken'),
+    ...Object.fromEntries(REFERENCE_EXCHANGES.map((name) => [
+      name,
+      externalSnapshots.some((snapshot) => snapshot.name === name),
+    ])),
   };
 
   return {
     timestamp: Date.now(),
     commonCoins: common.length,
-    activeSignals: coins.filter((coin) => coin.hasSignal).length,
-    availableExchanges: snapshots.map((snapshot) => snapshot.name),
+    activeSignals: new Set(
+      coins
+        .filter((coin) => coin.hasSignal)
+        .map((coin) => normalizeAssetSymbol(coin.symbol))
+        .filter(Boolean),
+    ).size,
+    availableExchanges: ['Wallex', ...externalSnapshots.map((snapshot) => snapshot.name)],
     usdtTmnRate: asNumber(usdtTmnRate),
     usdtTmnVolume: 0,
     usdtTmnMomentumPct: asNumber(usdtTmnChangePct),
@@ -709,7 +842,7 @@ export async function fetchSevenExchangeRadar(
     asNumber(usdtTmnChangePct),
     [...wallexCoins]
       .map((coin) => [
-        normalizeSevenExchangeSymbol(coin.symbol),
+        normalizeAssetSymbol(coin.symbol),
         asNumber(coin.priceChange24h),
         asNumber(coin.volume24hUsd),
       ])
