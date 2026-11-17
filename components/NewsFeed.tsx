@@ -6,9 +6,6 @@ import { gsap } from 'gsap';
 import {
   Newspaper,
   Search,
-  Filter,
-  Building2,
-  TrendingUp,
   Globe,
   Clock3,
   ExternalLink,
@@ -17,7 +14,6 @@ import { DidehbonLogoIcon } from '@/components/DidehbonLogo';
 import {
   NewsArticle,
   NewsApiResponse,
-  NewsCategoryFilter,
   NewsSourceId,
   Language,
   Theme,
@@ -243,7 +239,6 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [categoryFilter, setCategoryFilter] = useState<NewsCategoryFilter>('all');
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<NewsOriginFilter>('all');
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [showPersianByArticle, setShowPersianByArticle] = useState<Record<string, boolean>>({});
@@ -386,15 +381,6 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
       if (activeCategoryFilter !== 'all' && !matchesNewsOrigin(art, activeCategoryFilter)) {
         return false;
       }
-      // Category filter
-      if (categoryFilter !== 'all') {
-        if (categoryFilter === 'exchanges' && art.category !== 'exchanges') {
-          return false;
-        }
-        if (categoryFilter === 'market' && art.category !== 'market') {
-          return false;
-        }
-      }
       // Search query filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
@@ -406,17 +392,7 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
       }
       return true;
     });
-  }, [articles, activeCategoryFilter, categoryFilter, searchQuery]);
-
-  // Counts for tabs
-  const exchangeCount = useMemo(
-    () => articles.filter((a) => a.category === 'exchanges').length,
-    [articles]
-  );
-  const marketCount = useMemo(
-    () => articles.filter((a) => a.category === 'market').length,
-    [articles]
-  );
+  }, [articles, activeCategoryFilter, searchQuery]);
 
   const translateSelectedNews = async () => {
     if (!selectedNews) return;
@@ -465,24 +441,10 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
         }`}
       >
         <div className="flex items-center gap-3 pb-4 border-b border-slate-800/40">
-          <div className="flex items-center gap-3">
-            <DidehbonLogoIcon size={38} withGlow={isDark} />
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-bold tracking-tight">
-                  {t.navNews}
-                </h2>
-                <span
-                  className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold ${
-                    isDark ? 'bg-cyan-950/70 text-cyan-400 border border-cyan-800/60' : 'bg-cyan-50 text-cyan-800 border border-cyan-200'
-                  }`}
-                >
-                  didehbon.ir
-                </span>
-              </div>
-            </div>
-          </div>
-
+          <DidehbonLogoIcon size={38} withGlow={isDark} />
+          <h2 className="text-base sm:text-lg font-bold tracking-tight">
+            {t.navNews}
+          </h2>
         </div>
 
         {/* SEARCH AND FILTER BUTTONS */}
@@ -527,61 +489,18 @@ export default function NewsFeed({ lang, theme }: NewsFeedProps) {
                     isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-100 border-slate-200'
                   }`}
                 >
-                <button
-                  id="filter-category-all"
-                  onClick={() => setCategoryFilter('all')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md transition-all ${
-                    categoryFilter === 'all'
-                      ? isDark
+                  <button
+                    id="filter-category-all"
+                    type="button"
+                    onClick={() => setActiveCategoryFilter('all')}
+                    className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md transition-all ${
+                      isDark
                         ? 'bg-slate-800 text-blue-400 font-semibold shadow-sm'
                         : 'bg-white text-blue-700 font-semibold shadow-xs'
-                      : isDark
-                      ? 'text-slate-400 hover:text-slate-200'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {t.newsAll} ({lang === 'fa' ? toPersianDigits(articles.length) : articles.length})
-                </button>
-
-                <button
-                  id="filter-category-exchanges"
-                  onClick={() => setCategoryFilter('exchanges')}
-                  className={`shrink-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md transition-all ${
-                    categoryFilter === 'exchanges'
-                      ? isDark
-                        ? 'bg-slate-800 text-blue-400 font-semibold shadow-sm'
-                        : 'bg-white text-blue-700 font-semibold shadow-xs'
-                      : isDark
-                      ? 'text-slate-400 hover:text-slate-200'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  <span>{t.newsExchanges}</span>
-                  <span className="text-[10px] opacity-75 font-mono">
-                    ({lang === 'fa' ? toPersianDigits(exchangeCount) : exchangeCount})
-                  </span>
-                </button>
-
-                <button
-                  id="filter-category-market"
-                  onClick={() => setCategoryFilter('market')}
-                  className={`shrink-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md transition-all ${
-                    categoryFilter === 'market'
-                      ? isDark
-                        ? 'bg-slate-800 text-blue-400 font-semibold shadow-sm'
-                        : 'bg-white text-blue-700 font-semibold shadow-xs'
-                      : isDark
-                      ? 'text-slate-400 hover:text-slate-200'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  <span>{t.newsMarket}</span>
-                  <span className="text-[10px] opacity-75 font-mono">
-                    ({lang === 'fa' ? toPersianDigits(marketCount) : marketCount})
-                  </span>
-                </button>
+                    }`}
+                  >
+                    {t.newsAll} ({lang === 'fa' ? toPersianDigits(articles.length) : articles.length})
+                  </button>
                 </div>
 
                 {/* Source Filter */}

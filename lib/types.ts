@@ -100,7 +100,6 @@ export interface NetworksApiResponse {
   monitoredExchanges: string[];
 }
 
-export type NewsCategoryFilter = 'all' | 'exchanges' | 'market';
 export type NewsSourceId = 'all' | 'arzdigital' | 'mihansignal' | 'mihanblockchain' | 'cryptopotato' | 'coindesk' | 'coinmarketcap' | 'cointelegraph';
 
 export interface NewsArticle {

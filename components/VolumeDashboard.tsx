@@ -27,6 +27,7 @@ import {
 import NewsFeed from '@/components/NewsFeed';
 import MarketClockCards from '@/components/MarketClockCards';
 import MoneyFlowSankey from '@/components/MoneyFlowSankey';
+import SignalRadarBackground from '@/components/SignalRadarBackground';
 import MarketPulseDashboard from '@/components/MarketPulseDashboard';
 import DidehbonLogo, { DidehbonLogoIcon } from '@/components/DidehbonLogo';
 import {
@@ -426,6 +427,7 @@ export default function VolumeDashboard() {
           : 'bg-[#F4F6F9] text-slate-900 selection:bg-slate-200 selection:text-slate-900'
       }`}
     >
+      <SignalRadarBackground />
       <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 flex flex-col gap-6">
         {/* TOP BAR / NAVIGATION - Less is More */}
         <header

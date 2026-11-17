@@ -94,8 +94,6 @@ export const translations = {
     navNetworksDesc: 'بررسی وضعیت و کارمزد شبکه‌های واریز و برداشت در صرافی‌ها',
     // News Module
     newsAll: 'همه اخبار',
-    newsExchanges: 'اخبار صرافی‌ها',
-    newsMarket: 'اخبار بازار و تحلیل',
     newsSourceAll: 'همه منابع',
     newsSourceArzdigital: 'ارزدیجیتال',
     newsSourceMihansignal: 'میهن سیگنال',
@@ -222,8 +220,6 @@ export const translations = {
     navNetworksDesc: 'Compare deposit and withdrawal networks and fees across exchanges',
     // News Module
     newsAll: 'All News',
-    newsExchanges: 'Exchange News',
-    newsMarket: 'Market & Analysis',
     newsSourceAll: 'All Sources',
     newsSourceArzdigital: 'ArzDigital',
     newsSourceMihansignal: 'MihanSignal',
